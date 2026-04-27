@@ -687,16 +687,19 @@ const runBlitz = (
 	BlitzTimeoutError | BlitzMissingError
 > =>
 	Effect.gen(function* () {
-		const cmd = [binary, ...argv];
+		const cmd = [binary, "--workspace-root", opts.cwd, ...argv];
 		const result = yield* Effect.tryPromise({
 			try: () => {
 				const spawnOpts: Parameters<typeof spawnCollectNode>[1] = {
 					cwd: opts.cwd,
 					timeoutMs: opts.timeoutMs,
 					env: {
-						...(process.env as Record<string, string>),
+						HOME: process.env.HOME ?? "",
+						PATH: process.env.PATH ?? "",
+						XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? "",
 						FASTEDIT_NO_UPDATE_CHECK: "1",
 						BLITZ_NO_UPDATE_CHECK: "1",
+						BLITZ_WORKSPACE: opts.cwd,
 					},
 				};
 				if (opts.stdin !== undefined) spawnOpts.stdin = opts.stdin;

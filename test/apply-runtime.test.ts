@@ -190,7 +190,7 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(firstCall).toBeDefined();
 		const cmd = firstCall[0];
 		const opts = firstCall[1];
-		expect(cmd).toEqual(["blitz", "apply", "--edit", "-", "--json", "--dry-run", "--diff"]);
+		expect(cmd).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json", "--dry-run", "--diff"]);
 		const payload = JSON.parse(opts.stdin);
 		expect(payload.version).toBe(1);
 		expect(payload.file).toBe(file);
