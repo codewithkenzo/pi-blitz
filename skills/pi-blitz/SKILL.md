@@ -1,13 +1,27 @@
 ---
 name: pi-blitz
-description: Symbol-anchored AST edits through the blitz Zig CLI (alpha 0.1.0-alpha.0). Effective for large preserved bodies and structural symbolic edits; not a universal replacement for core edit. Tiny or one-line edits often favor core edit. No prebuilt binaries yet — requires blitz built from source and configured via ~/.pi/pi-blitz.json. MCP alternative available at codewithkenzo/blitz.
+description: Symbol-anchored AST edits through the blitz Zig CLI. Effective for large preserved bodies and structural symbolic edits; not a universal replacement for core edit. Tiny or one-line edits often favor core edit. Published package installs the matching native Blitz binary on supported platforms. MCP alternative available through npx/bunx @codewithkenzo/blitz.
 ---
 
 # pi-blitz
 
 ## Current status
 
-Alpha — version 0.1.0-alpha.0. Requires blitz CLI 0.1.0-alpha.0 built from source ([codewithkenzo/blitz](https://github.com/codewithkenzo/blitz)). No prebuilt binaries published yet. Configure the binary path via `~/.pi/pi-blitz.json`.
+Published as `@codewithkenzo/pi-blitz`. It depends on `@codewithkenzo/blitz`, which installs the matching native Zig CLI package on supported platforms. Manual `~/.pi/pi-blitz.json` binary config is only needed for custom/source builds or unsupported platforms.
+
+Install:
+
+```bash
+pi install npm:@codewithkenzo/pi-blitz
+```
+
+MCP alternative:
+
+```bash
+npx --yes --package=@codewithkenzo/blitz -- blitz-mcp
+# or
+bunx -p @codewithkenzo/blitz blitz-mcp
+```
 
 Authenticated Pi/model benchmarks show large reductions in provider output tokens, tool-call argument tokens, wall time, and cost on handled symbol edits. Benchmark 2 efficiency claims compare a correct blitz result against a failed core attempt — not two correct results. Use with undo/review discipline.
 

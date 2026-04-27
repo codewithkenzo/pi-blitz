@@ -59,7 +59,21 @@ Install from npm:
 pi install npm:@codewithkenzo/pi-blitz
 ```
 
-`pi-blitz` depends on `@codewithkenzo/blitz`, which installs the matching native CLI package when available.
+`pi-blitz` depends on `@codewithkenzo/blitz`, which installs the matching native CLI package when available. No manual Zig build or `BLITZ_BIN` config is needed for supported platforms.
+
+Copy/paste for an agent:
+
+````md
+Install Pi Blitz for fast token-efficient edits.
+
+Run:
+
+```bash
+pi install npm:@codewithkenzo/pi-blitz
+```
+
+Then restart/open Pi if needed and verify `/help` shows `pi_blitz_*` tools. Run `pi_blitz_doctor` if available.
+````
 
 From source:
 

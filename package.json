@@ -1,6 +1,6 @@
 {
   "name": "@codewithkenzo/pi-blitz",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Pi extension wrapping the blitz AST-aware fast-edit CLI",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,7 +35,7 @@
     "blitz"
   ],
   "dependencies": {
-    "@codewithkenzo/blitz": "0.1.0-alpha.3",
+    "@codewithkenzo/blitz": "0.1.0-alpha.4",
     "@sinclair/typebox": "^0.34.0",
     "effect": "4.0.0-beta.48"
   },
