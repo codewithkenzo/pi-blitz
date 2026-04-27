@@ -51,38 +51,25 @@ Core `edit` is still better for small direct changes. `pi-blitz` is for speed an
 
 ## Install
 
-`pi-blitz` needs the `blitz` CLI.
-
-### 1. Build Blitz
-
-```bash
-git clone https://github.com/codewithkenzo/blitz
-cd blitz
-zig build -Doptimize=ReleaseFast
-./zig-out/bin/blitz doctor
-```
-
-### 2. Configure Pi
-
-Point Pi at the binary:
-
-```json
-// ~/.pi/pi-blitz.json
-{ "binary": "/abs/path/to/blitz/zig-out/bin/blitz" }
-```
-
-### 3. Install the extension
-
-From npm:
+Install from npm:
 
 ```bash
 pi install npm:@codewithkenzo/pi-blitz
 ```
 
+`pi-blitz` depends on `@codewithkenzo/blitz`, which installs the matching native CLI package when available.
+
 From source:
 
 ```bash
 pi install /path/to/pi-blitz
+```
+
+If you build Blitz yourself or want a custom binary, point Pi at it:
+
+```json
+// ~/.pi/pi-blitz.json
+{ "binary": "/abs/path/to/blitz/zig-out/bin/blitz" }
 ```
 
 Verify in Pi:
