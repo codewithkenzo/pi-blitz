@@ -1,144 +1,175 @@
 # pi-blitz
 
-Symbol-anchored code editing via AST. Part of the Pi Rig plugin suite.
+Fast, token-efficient code edits for Pi.
 
-## What it does
-
-`pi-blitz` wraps the [`blitz`](https://github.com/codewithkenzo/blitz) CLI — a semantic editor that understands code structure (imports, function bodies, expressions) and edits via symbol anchors instead of line numbers or text search.
-
-Rather than rewriting entire files, blitz targets specific functions, classes, or expressions and applies surgical edits (replace body, wrap, insert, patch). This approach reduces model output tokens significantly and handles large structural changes that text-based editors struggle with.
+`pi-blitz` is a Pi Rig extension that gives Pi a set of low-token edit tools powered by the [`blitz`](https://github.com/codewithkenzo/blitz) CLI. It is built for the moments when a coding agent needs to change a large function but should not waste time and tokens printing the whole function back.
 
 ## Why use it
 
-**Large codebase edits:** Blitz excels when:
-- Editing function bodies while preserving signature
-- Wrapping expressions or statements
-- Multi-site structural changes within one file
-- Refactoring with preservation of surrounding code
+Normal agent edits can get expensive fast: the model reads a big body, rewrites most of it unchanged, then sends that whole replacement through a tool call. Blitz changes that pattern.
 
-**Token efficiency:** Output is compact. `wrap_body` on a 10k-token function may produce ~100 tokens of instructions instead of ~10k tokens of replacement text.
+With `pi-blitz`, Pi can send a compact operation instead:
 
-**Semantic safety:** Operates on AST, not text. Renames skip strings and comments. Edits are symbol-scoped, not regex-prone.
+- “wrap `fetchUser` in try/catch”
+- “replace the last return in `computeTotal`”
+- “insert this line after `const normalized = ...`”
+- “rename this identifier in code, but not in strings/comments”
 
-**Core `edit` vs. blitz:** Core `edit` is better for small changes (one-liners, whole-file rewrites, new files). Blitz targets the middle ground — large bodies, structural precision, multi-edit batches.
+Blitz handles the file lookup, code location, indentation, parse check, backup, and write.
+
+On a measured 10k-token function wrap, Blitz reduced model output from about 9,600 tokens to about 85 tokens and cut wall time from about 62s to about 4s. That is the point: fewer wasted tokens, faster edits, less agent thrash.
+
+## When it helps
+
+Use `pi-blitz` when the edit is larger than a one-liner but smaller than a full rewrite:
+
+| Good fit | Better with core edit/write |
+|---|---|
+| Wrap a large function body | New files |
+| Change a return expression | Tiny one-line changes |
+| Insert code near a known statement | Whole-file rewrites |
+| Several related edits in one file | Unsupported languages |
+| Rename an identifier safely | Exact oldText/newText patches |
+
+Core `edit` is still better for small direct changes. `pi-blitz` is for speed and token efficiency on larger structured edits.
 
 ## Install
 
-Requires the `blitz` CLI built from source at [codewithkenzo/blitz](https://github.com/codewithkenzo/blitz).
+`pi-blitz` needs the `blitz` CLI.
 
-1. **Build blitz:**
-   ```bash
-   git clone https://github.com/codewithkenzo/blitz
-   cd blitz
-   zig build -Doptimize=ReleaseFast
-   ```
+### 1. Build Blitz
 
-2. **Point pi-blitz at your binary:**
-   ```json
-   // ~/.pi/pi-blitz.json
-   { "binary": "/abs/path/to/blitz/zig-out/bin/blitz" }
-   ```
+```bash
+git clone https://github.com/codewithkenzo/blitz
+cd blitz
+zig build -Doptimize=ReleaseFast
+./zig-out/bin/blitz doctor
+```
 
-3. **Install the extension:**
-   ```bash
-   pi install /path/to/pi-plugins-repo-kenzo/extensions/pi-blitz
-   ```
+### 2. Configure Pi
 
-4. **Verify:**
-   ```
-   /help
-   ```
-   Should list 15 `pi_blitz_*` tools.
+Point Pi at the binary:
 
-## Tools overview
+```json
+// ~/.pi/pi-blitz.json
+{ "binary": "/abs/path/to/blitz/zig-out/bin/blitz" }
+```
+
+### 3. Install the extension
+
+From npm:
+
+```bash
+pi install npm:@codewithkenzo/pi-blitz
+```
+
+From source:
+
+```bash
+pi install /path/to/pi-blitz
+```
+
+Verify in Pi:
+
+```text
+/help
+```
+
+You should see `pi_blitz_*` tools.
+
+## Tools
 
 | Tool | Use for |
 |---|---|
-| `pi_blitz_read` | Inspect file structure — imports, functions, declarations with line ranges. |
-| `pi_blitz_edit` | Single symbol edit: replace body or insert after/before anchor. |
-| `pi_blitz_batch` | Multiple edits to one file in one call. |
-| `pi_blitz_apply` | Structured JSON-based edit with operation type. |
-| `pi_blitz_wrap_body` | Wrap function/expression body (e.g., add try-catch, wrap in async). |
-| `pi_blitz_replace_body_span` | Replace a specific span inside a body. |
-| `pi_blitz_insert_body_span` | Insert text at position inside a body. |
-| `pi_blitz_compose_body` | Preserve islands of code while rewriting the rest. |
-| `pi_blitz_multi_body` | Atomic multi-body edits. |
-| `pi_blitz_patch` | Compact tuple operations: `replace`, `insert_after`, `wrap`, `replace_return`, `try_catch`. |
-| `pi_blitz_try_catch` | Semantic shorthand for wrapping in try-catch. |
-| `pi_blitz_replace_return` | Semantic shorthand for return statement rewrite. |
-| `pi_blitz_rename` | AST-verified rename (skips strings, comments). |
-| `pi_blitz_undo` | Revert last edit. Requires `confirm: true`. |
-| `pi_blitz_doctor` | Check version, supported grammars, cache. |
+| `pi_blitz_read` | Inspect a file before editing. |
+| `pi_blitz_wrap_body` | Wrap a large body without repeating it. |
+| `pi_blitz_try_catch` | Add try/catch around a symbol body. |
+| `pi_blitz_replace_return` | Replace a return expression. |
+| `pi_blitz_replace_body_span` | Replace a known span inside a body. |
+| `pi_blitz_insert_body_span` | Insert text before/after a known body anchor. |
+| `pi_blitz_patch` | Compact tuple edits: replace, insert, wrap, return, try/catch. |
+| `pi_blitz_multi_body` | Multiple body edits in one file. |
+| `pi_blitz_compose_body` | Preserve parts of a body while changing the rest. |
+| `pi_blitz_edit` | Symbol-anchored replacement/insertion. |
+| `pi_blitz_batch` | Batch several symbol edits. |
+| `pi_blitz_apply` | Full structured JSON edit API. |
+| `pi_blitz_rename` | Rename identifiers while skipping strings/comments. |
+| `pi_blitz_undo` | Undo the last Blitz edit for a file. |
+| `pi_blitz_doctor` | Check Blitz binary, grammars, and cache. |
 
 ## Examples
 
-### Wrap a function in try-catch
+### Add try/catch without repeating a huge body
 
-```
-tool: pi_blitz_wrap_body
+Use:
+
+```text
+pi_blitz_try_catch
 file: src/api/users.ts
 symbol: fetchUser
-operation: try_catch
+catchBody: console.error(error); throw error;
 ```
 
-Blitz wraps the entire body of `fetchUser` in try-catch without repeating it.
+Pi sends a small tool call. Blitz keeps the existing function body and wraps it.
 
-### Batch edits
+### Replace a return expression
 
-```
-tool: pi_blitz_batch
-file: src/db/schema.ts
-edits:
-  - symbol: User
-    operation: replace_body
-    payload: "..."
-  - symbol: Post
-    operation: wrap_body
-    payload: "..."
+Use:
+
+```text
+pi_blitz_replace_return
+file: src/pricing.ts
+symbol: computeTotal
+expr: subtotal + tax
+occurrence: last
 ```
 
-### Rename across file
+### Rename code safely
 
-```
-tool: pi_blitz_rename
+Use:
+
+```text
+pi_blitz_rename
 file: src/utils.ts
-old: processData
-new: transformPayload
+old_name: processData
+new_name: transformPayload
 ```
 
-Renames `processData` function. Skips matching strings and comments.
+Strings and comments are skipped.
 
-## When to use / when not to use
+## MCP alternative
 
-**Use blitz for:**
-- Function body refactors (preserve signature, rewrite logic)
-- Structural wrapping (try-catch, async wrapper, conditional guard)
-- Multi-edit batches within one file
-- Large codebases where precision matters
+If you want the same Blitz tools outside Pi, use the MCP server included in [`codewithkenzo/blitz`](https://github.com/codewithkenzo/blitz):
 
-**Avoid blitz for:**
-- One-liner changes (core `edit` is simpler)
-- New files (use core `edit`)
-- Whole-file rewrites (core `edit` is more direct)
-- Edits across multiple files (run multiple tools in sequence instead)
+```bash
+BLITZ_BIN=/abs/path/to/blitz/zig-out/bin/blitz \
+BLITZ_WORKSPACE=/abs/path/to/project \
+bun /abs/path/to/blitz/mcp/blitz-mcp.ts
+```
 
 ## Configuration
 
-`~/.pi/pi-blitz.json` only:
+`~/.pi/pi-blitz.json`:
 
 ```ts
 type Config = {
-  binary?: string; // path to blitz CLI, or command name on PATH
+  binary?: string; // absolute path or command name on PATH
 };
 ```
 
-Cannot be overridden at project level.
+The binary path is user-level config. Project config cannot override it.
 
-## Architecture & More
+## Supported languages
 
-Full docs, edit algorithm, grammar support, and design: [`codewithkenzo/blitz/docs/blitz.md`](https://github.com/codewithkenzo/blitz/blob/main/docs/blitz.md).
+Blitz currently supports:
 
-Implementation uses Effect v4 internally (errors, concurrency, resource cleanup). Runs on Zig 0.16+.
+- TypeScript
+- TSX
+- Python
+- Rust
+- Go
+
+Run `pi_blitz_doctor` to confirm your local binary and grammar support.
 
 ## License
 
