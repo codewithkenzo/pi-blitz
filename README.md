@@ -8,6 +8,20 @@ Fast, token-efficient code edits for Pi.
 
 Normal agent edits can get expensive fast: the model reads a big body, rewrites most of it unchanged, then sends that whole replacement through a tool call. Blitz changes that pattern.
 
+### Current benchmark snapshot
+
+`gpt-5.4-mini`, live Pi tool calls, N=1 full matrix plus prior N=5 checks on strong classes:
+
+| Edit class | Core edit | pi-blitz | Result |
+|---|---:|---:|---|
+| 10k function try/catch wrap | 9,640 output tokens / 61s | 85 output tokens / 4.6s | 99.1% fewer output tokens |
+| Large structural patch, 3 edits | 9,708 output tokens / failed output | 107 output tokens / correct | 98.9% fewer output tokens vs failed core attempt |
+| Async try/catch wrapper | 149 arg tokens | 42 arg tokens | 71.8% fewer tool-call arg tokens |
+| Class method try/catch wrapper | 118 arg tokens | 40 arg tokens | 66.1% fewer tool-call arg tokens |
+| TSX return replacement | 67 arg tokens | 48 arg tokens | 28.4% fewer tool-call arg tokens |
+
+The big wins are large preserved bodies. Small exact edits should still use Pi core tools.
+
 With `pi-blitz`, Pi can send a compact operation instead:
 
 - “wrap `fetchUser` in try/catch”
@@ -17,7 +31,9 @@ With `pi-blitz`, Pi can send a compact operation instead:
 
 Blitz handles the file lookup, code location, indentation, parse check, backup, and write.
 
-On a measured 10k-token function wrap, Blitz reduced model output from about 9,600 tokens to about 85 tokens and cut wall time from about 62s to about 4s. That is the point: fewer wasted tokens, faster edits, less agent thrash.
+On a measured 10k-token function wrap, Blitz reduced model output from 9,640 tokens to 85 tokens and cut wall time from 61s to 4.6s. On a larger three-edit structural patch, Blitz used 107 output tokens where a core edit attempt used 9,708 and failed the expected output. For smaller semantic edits, the savings are smaller but still useful: try/catch wrappers cut tool-call arguments by 66–72%, and return-expression rewrites cut them by 22–28% in the current Pi bench.
+
+That is the point: fewer wasted tokens, faster edits, less agent thrash.
 
 ## When it helps
 
