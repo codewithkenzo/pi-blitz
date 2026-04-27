@@ -2,6 +2,8 @@
 
 Fast, token-efficient code edits for Pi.
 
+On a 10k-function try/catch wrap benchmark, Pi Blitz used 85 provider output tokens instead of 9,640 and finished in 4.6s instead of 61s.
+
 `pi-blitz` is a Pi Rig extension that gives Pi a set of low-token edit tools powered by the [`blitz`](https://github.com/codewithkenzo/blitz) CLI. It is built for the moments when a coding agent needs to change a large function but should not waste time and tokens printing the whole function back.
 
 ## Why use it
@@ -31,7 +33,7 @@ With `pi-blitz`, Pi can send a compact operation instead:
 
 Blitz handles the file lookup, code location, indentation, parse check, backup, and write.
 
-On a measured 10k-token function wrap, Blitz reduced model output from 9,640 tokens to 85 tokens and cut wall time from 61s to 4.6s. On a larger three-edit structural patch, Blitz used 107 output tokens where a core edit attempt used 9,708 and failed the expected output. For smaller semantic edits, the savings are smaller but still useful: try/catch wrappers cut tool-call arguments by 66–72%, and return-expression rewrites cut them by 22–28% in the current Pi bench.
+On a larger three-edit structural patch, Blitz used 107 output tokens where a core edit attempt used 9,708 and failed the expected output. For smaller semantic edits, the savings are smaller but still useful: try/catch wrappers cut tool-call arguments by 66–72%, and return-expression rewrites cut them by 22–28% in the current Pi bench.
 
 That is the point: fewer wasted tokens, faster edits, less agent thrash.
 
