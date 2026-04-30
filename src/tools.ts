@@ -1,8 +1,10 @@
 import { Type } from "@sinclair/typebox";
+import type { AgentToolUpdateCallback } from "@mariozechner/pi-coding-agent";
 import { Effect } from "effect";
 import { spawnCollectNode } from "./spawn.js";
 import { canonicalize } from "./paths.js";
-import { runTool, type BlitzToolResult } from "./tool-runtime.js";
+import { blitzRenderers } from "./renderers.js";
+import { runTool, type BlitzToolResult, type PiBlitzDetails } from "./tool-runtime.js";
 import { makePathLocks } from "./mutex.js";
 import {
 	BlitzMissingError,
@@ -20,6 +22,55 @@ const SNIPPET_MAX = 65_536;
 const BATCH_MAX_ITEMS = 64;
 const BATCH_MAX_AGGREGATE = 256 * 1024;
 const APPLY_MAX_PAYLOAD = 512 * 1024;
+const UPDATE_TEXT_MAX = 120;
+
+type ToolProgressUpdate = AgentToolUpdateCallback<PiBlitzDetails | undefined>;
+
+const emitBlitzUpdate = async (
+	onUpdate: ToolProgressUpdate | undefined,
+	summary: string,
+	details: PiBlitzDetails | undefined,
+): Promise<void> => {
+	if (typeof onUpdate !== "function") return;
+	const text = summary.trim();
+	if (text.length === 0) return;
+	const truncated = text.length <= UPDATE_TEXT_MAX
+		? text
+		: `${text.slice(0, UPDATE_TEXT_MAX - 3)}...`;
+	try {
+		await onUpdate({
+			content: [{ type: "text", text: truncated }],
+			details,
+		});
+	} catch {
+		return;
+	}
+};
+
+const runWithProgress = async <T>(
+	onUpdate: ToolProgressUpdate | undefined,
+	runningSummary: string,
+	doneSummary: string,
+	runningDetails: PiBlitzDetails | undefined,
+	operationResult: () => Promise<T>,
+): Promise<T> => {
+	await emitBlitzUpdate(onUpdate, runningSummary, runningDetails);
+	try {
+		const result = await operationResult();
+		await emitBlitzUpdate(onUpdate, doneSummary, {
+			...runningDetails,
+			status: "done",
+		});
+		return result;
+	} catch (error) {
+		await emitBlitzUpdate(onUpdate, "blitz: failed", {
+			...runningDetails,
+			status: "failed",
+			summary: "blitz: failed",
+		});
+		throw error;
+	}
+};
 
 const pathSchema = Type.String({ minLength: 1, maxLength: PATH_MAX, description: "Absolute or repo-relative path to the source file." });
 const snippetSchema = Type.String({
@@ -113,6 +164,13 @@ const applyOptionsSchema = Type.Object(
 				description: "Set true to request compact diff summary from CLI output.",
 			}),
 		),
+		diffContext: Type.Optional(
+			Type.Number({
+				minimum: 0,
+				maximum: 24,
+				description: "Unified diff context lines when includeDiff/include_diff is set. Defaults to 12.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -139,6 +197,7 @@ export const patchToolParamsSchema = Type.Object({
 	ops: patchOpsSchema,
 	dry_run: Type.Optional(Type.Boolean({ description: "No-write preview request for patch." })),
 	include_diff: Type.Optional(Type.Boolean({ description: "Request compact diff summary in CLI output." })),
+	diff_context: Type.Optional(Type.Number({ minimum: 0, maximum: 24, description: "Unified diff context lines when include_diff is true. Defaults to 12." })),
 });
 
 export const applyToolParamsSchema = Type.Object({
@@ -150,6 +209,7 @@ export const applyToolParamsSchema = Type.Object({
 	include_diff: Type.Optional(
 		Type.Boolean({ description: "Request compact diff summary in CLI output." }),
 	),
+	diff_context: Type.Optional(Type.Number({ minimum: 0, maximum: 24, description: "Unified diff context lines when include_diff is true. Defaults to 12." })),
 	options: Type.Optional(applyOptionsSchema),
 });
 
@@ -189,9 +249,11 @@ type BlitzApplyParams = {
 	edit: Record<string, unknown>;
 	dry_run?: boolean;
 	include_diff?: boolean;
+	diff_context?: number;
 	options?: {
 		dryRun?: boolean;
 		includeDiff?: boolean;
+		diffContext?: number;
 	};
 };
 
@@ -212,13 +274,21 @@ type BlitzApplyPayload = {
 // Soft-error classifier — matches the signal taxonomy in docs/architecture/blitz.md.
 const classifySoft = (stdout: string, stderr: string): BlitzSoftError | undefined => {
 	if (/^No undo history for /m.test(stderr)) {
-		return new BlitzSoftError({ reason: "no-undo-history", stderr });
+		return new BlitzSoftError({ reason: "no-undo-history", stderr, suggest: "no prior Blitz edit recorded for this file" });
 	}
 	if (/^No occurrences of /m.test(stderr)) {
-		return new BlitzSoftError({ reason: "no-occurrences", stderr });
+		return new BlitzSoftError({
+			reason: "no-occurrences",
+			stderr,
+			suggest: "run pi_blitz_read or use core edit",
+		});
 	}
 	if (/^Error: no code references to /m.test(stderr)) {
-		return new BlitzSoftError({ reason: "no-references", stderr });
+		return new BlitzSoftError({
+			reason: "no-references",
+			stderr,
+			suggest: "run pi_blitz_read or use core edit",
+		});
 	}
 	// Stdout-only soft states are informational, handled separately.
 	return stderr.trim().length > 0
@@ -273,12 +343,22 @@ const parseEditMetrics = (stdout: string): EditMetrics | undefined => {
 };
 
 const editMetricsResult = (metrics: EditMetrics): BlitzToolResult => {
-	const realisticPct = metrics.estimatedPayloadSavedPctVsRealisticAnchor.toFixed(1);
-	const tokens = metrics.estimatedTokensSavedBytesDiv4VsRealisticAnchor;
-	const verdict = tokens >= 0 ? `saved ~${tokens} tokens` : `cost ~${Math.abs(tokens)} extra tokens`;
-	const text = `Applied edit to ${metrics.file}. Lane: ${metrics.lane}. blitz payload ${metrics.blitzPayloadBytes}B vs realistic core anchor ${metrics.coreRealisticAnchorPayloadBytes}B (~${metrics.realisticContextLines}-line context): ${realisticPct}% ${verdict} (bytes/4). Bounds: full-symbol ${metrics.coreFullSymbolPayloadBytes}B / minimal-anchor ${metrics.coreMinimalAnchorPayloadBytes}B. CLI wall: ${metrics.wallMs}ms.`;
-	return okResult(text, {
+	const changeLabel = `${metrics.fileBytesBefore}->${metrics.fileBytesAfter} bytes`;
+	const lines: string[] = [];
+	lines.push(`blitz edit applied: ${metrics.file}`);
+	lines.push(`op: ${metrics.mode}`);
+	const wallLine = formatDiffWallLine(changeLabel, metrics.wallMs);
+	if (wallLine !== undefined) lines.push(wallLine);
+	if (metrics.lane === "marker") lines.push("mode: marker");
+	const contentText = lines.join("\n");
+	return okResult(contentText, {
 		status: metrics.status,
+		opLabel: "edit",
+		pathLabel: metrics.file,
+		changeLabel,
+		durationMs: metrics.wallMs,
+		wallMs: metrics.wallMs,
+		savingsPct: metrics.estimatedPayloadSavedPctVsRealisticAnchor,
 		lane: metrics.lane,
 		mode: metrics.mode,
 		language: metrics.language,
@@ -301,7 +381,7 @@ const editMetricsResult = (metrics: EditMetrics): BlitzToolResult => {
 		estimatedTokensSavedBytesDiv4VsMinimalAnchor: metrics.estimatedTokensSavedBytesDiv4VsMinimalAnchor,
 		realisticContextLines: metrics.realisticContextLines,
 		usedMarkers: metrics.usedMarkers,
-		wallMs: metrics.wallMs,
+		summary: lines.join(" · "),
 	});
 };
 
@@ -551,21 +631,33 @@ const assertApplyPayload = (params: BlitzApplyParams): InvalidParamsError | null
 	return null;
 };
 
-const buildApplyRequest = (abs: string, params: BlitzApplyParams): BlitzApplyPayload => ({
-	version: 1,
-	file: abs,
-	operation: params.operation,
-	...(params.target !== undefined ? { target: params.target } : {}),
-	edit: params.edit,
-	options: {
-		requireParseClean: true,
-		requireSingleMatch: true,
-		...(params.dry_run === true ? { dryRun: true } : {}),
-		...(params.options?.dryRun === true ? { dryRun: true } : {}),
-		...(params.options?.includeDiff === true ? { diffContext: 12 } : {}),
-		...(params.include_diff === true ? { diffContext: 12 } : {}),
-	},
-});
+const wantsDiff = (params: BlitzApplyParams): boolean =>
+	params.include_diff === true || params.options?.includeDiff === true;
+
+const resolveDiffContext = (params: BlitzApplyParams): number | undefined => {
+	if (!wantsDiff(params)) return undefined;
+	if (typeof params.diff_context === "number") return params.diff_context;
+	if (typeof params.options?.diffContext === "number") return params.options.diffContext;
+	return 12;
+};
+
+const buildApplyRequest = (abs: string, params: BlitzApplyParams): BlitzApplyPayload => {
+	const diffContext = resolveDiffContext(params);
+	return {
+		version: 1,
+		file: abs,
+		operation: params.operation,
+		...(params.target !== undefined ? { target: params.target } : {}),
+		edit: params.edit,
+		options: {
+			requireParseClean: true,
+			requireSingleMatch: true,
+			...(params.dry_run === true ? { dryRun: true } : {}),
+			...(params.options?.dryRun === true ? { dryRun: true } : {}),
+			...(diffContext !== undefined ? { diffContext } : {}),
+		},
+	};
+};
 
 const parseApplyResponsePayload = (stdout: string) => {
 	const trimmed = stdout.trim();
@@ -607,12 +699,13 @@ type ApplyResponsePayload = {
 };
 
 const isSavingsCandidate = (status: string | undefined, validation: ApplyResponseValidation | undefined) =>
-	(status === "applied" || status === "preview") && validation?.parseClean !== false;
+	status === "applied" && validation?.parseClean === true;
 
 const formatDiffSummary = (diffSummary: unknown): string | undefined => {
 	if (typeof diffSummary === "string") return diffSummary;
 	if (diffSummary === null || typeof diffSummary !== "object") return undefined;
-	const summary = diffSummary as { added?: number; removed?: number; changed?: number; lines?: number; context?: number };
+	const summary =
+		diffSummary as { added?: number; removed?: number; changed?: number; lines?: number; context?: number };
 	const parts: string[] = [];
 	if (typeof summary.added === "number") parts.push(`+${summary.added}`);
 	if (typeof summary.removed === "number") parts.push(`-${summary.removed}`);
@@ -622,51 +715,132 @@ const formatDiffSummary = (diffSummary: unknown): string | undefined => {
 	return parts.length > 0 ? parts.join("/") : undefined;
 };
 
-const applyResultToText = (payload: ApplyResponsePayload): BlitzToolResult => {
+const formatBlitzStatusLine = (status: string, fileLabel: string): string => {
+	if (status === "applied") return `blitz patch applied: ${fileLabel}`;
+	if (status === "preview") return `blitz patch preview: ${fileLabel}`;
+	return `blitz patch ${status}: ${fileLabel}`;
+};
+
+const formatOpLabel = (operation: string, opLabel?: string): string | undefined => {
+	if (opLabel !== undefined && opLabel.trim().length > 0) return `op: ${opLabel.trim()}`;
+	if (operation.length === 0) return undefined;
+	return `op: ${operation}`;
+};
+
+const formatParseLine = (validation: ApplyResponseValidation | undefined): string | undefined => {
+	if (validation?.parseClean === undefined && validation?.parseErrorCount === undefined) return undefined;
+	if (validation.parseClean === true) return "parse: clean";
+	if (validation.parseClean === false) {
+		return validation.parseErrorCount === undefined || validation.parseErrorCount <= 0
+			? "parse: dirty"
+			: `parse: dirty (${validation.parseErrorCount} parse errors)`;
+	}
+	if (validation.parseErrorCount === undefined) return undefined;
+	return validation.parseErrorCount === 0 ? "parse: clean" : `parse: dirty (${validation.parseErrorCount} parse errors)`;
+};
+
+const formatDiffWallLine = (diffSummary: string | undefined, wallMs: number | undefined): string | undefined => {
+	if (diffSummary === undefined && wallMs === undefined) return undefined;
+	if (diffSummary === undefined) return `wall: ${wallMs}ms`;
+	if (wallMs === undefined) return `changed: ${diffSummary}`;
+	return `changed: ${diffSummary} · wall: ${wallMs}ms`;
+};
+
+const formatSavingsLine = (status: string, validation: ApplyResponseValidation | undefined, metric: ApplyResponseMetrics): string | undefined => {
+	if (!isSavingsCandidate(status, validation)) return undefined;
+	if (typeof metric.estimatedPayloadSavedPctVsRealisticAnchor !== "number") return undefined;
+	if (metric.estimatedPayloadSavedPctVsRealisticAnchor < 30) return undefined;
+	return `saved: ~${Math.round(metric.estimatedPayloadSavedPctVsRealisticAnchor)}% payload vs realistic-anchor edit`;
+};
+
+const derivePatchOpsLabel = (ops: unknown[]): string => {
+	const labels = ops.flatMap((op): string[] => {
+		if (!isPatchTuple(op)) return [];
+		return [`${String(op[0])}(${typeof op[1] === "string" && op[1].trim().length > 0 ? op[1] : "?"})`];
+	});
+	if (labels.length === 0) return "patch";
+	if (labels.length <= 3) return `patch(${labels.join(", ")})`;
+	return `patch(${labels.length} ops)`;
+};
+
+const deriveMultiBodyLabel = (edits: unknown[]): string => {
+	const labels = edits.map((entry): string => {
+		if (entry === null || typeof entry !== "object") return "edit";
+		const cast = entry as { op?: unknown; symbol?: unknown };
+		const op = isNonEmptyString(cast.op) ? cast.op : "edit";
+		const symbol = isNonEmptyString(cast.symbol) ? cast.symbol : "?";
+		return `${op}(${symbol})`;
+	});
+	if (labels.length === 0) return "multi_body";
+	if (labels.length <= 2) return `multi_body(${labels.join(", ")})`;
+	return `multi_body(${labels.length} edits)`;
+};
+
+const deriveApplyOpLabel = (payloadOp: string, params?: BlitzApplyParams): string => {
+	if (params === undefined) return payloadOp;
+	if (params.operation === "patch" && Array.isArray((params.edit as Record<string, unknown>).ops)) {
+		const ops = (params.edit as Record<string, unknown>).ops as unknown[];
+		return derivePatchOpsLabel(ops);
+	}
+	if (params.operation === "multi_body" && Array.isArray((params.edit as Record<string, unknown>).edits)) {
+		const edits = (params.edit as Record<string, unknown>).edits as unknown[];
+		return deriveMultiBodyLabel(edits);
+	}
+	if (isNonEmptyString(params.target?.symbol)) return `${payloadOp}(${params.target.symbol})`;
+	return params.operation;
+};
+
+type ApplyFormatContext = {
+	opLabel?: string;
+	fileLabel?: string;
+};
+
+const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatContext = {}): BlitzToolResult => {
 	const status = payload.status ?? "unknown";
 	const operation = payload.operation ?? "unknown";
-	const file = payload.file ?? "(unknown)";
+	const file = payload.file ?? context.fileLabel ?? "(unknown)";
 	const metric = payload.metrics ?? {};
 	const parse = payload.validation;
-	const chunks: string[] = [];
-	chunks.push(`blitz apply: status=${status} operation=${operation} file=${file}`);
-	if (parse?.parseClean !== undefined) chunks.push(`parse=${parse.parseClean ? "clean" : "dirty"}`);
-	if (typeof parse?.parseErrorCount === "number") {
-		chunks.push(`parseErrors=${parse.parseErrorCount}`);
-	}
-	if (typeof metric.wallMs === "number") chunks.push(`wall=${metric.wallMs}ms`);
-	if (payload.ranges !== undefined) chunks.push("ranges=present");
 	const diffSummary = formatDiffSummary(payload.diffSummary);
-	if (diffSummary !== undefined) chunks.push(`diff=${diffSummary}`);
-
-	if (
-		typeof metric.estimatedPayloadSavedPctVsRealisticAnchor === "number" &&
-		typeof metric.estimatedTokensSavedBytesDiv4VsRealisticAnchor === "number" &&
-		isSavingsCandidate(status, parse)
-	) {
-		chunks.push(
-			`estimated savings ${metric.estimatedPayloadSavedPctVsRealisticAnchor.toFixed(1)}% (${Math.round(
-				metric.estimatedTokensSavedBytesDiv4VsRealisticAnchor,
-			)} bytes/4)`,
-		);
+	const lines: string[] = [];
+	lines.push(formatBlitzStatusLine(status, file));
+	const opLine = formatOpLabel(operation, context.opLabel);
+	if (opLine !== undefined) lines.push(opLine);
+	const parseLine = formatParseLine(parse);
+	if (parseLine !== undefined) lines.push(parseLine);
+	const changeLine = formatDiffWallLine(diffSummary, typeof metric.wallMs === "number" ? metric.wallMs : undefined);
+	if (changeLine !== undefined) lines.push(changeLine);
+	const savingsLine = formatSavingsLine(status, parse, metric);
+	if (savingsLine !== undefined) lines.push(savingsLine);
+	const contentText = lines.join("\n");
+	const summaryParts = [
+		`status=${status}`,
+		context.opLabel !== undefined ? context.opLabel : operation,
+		parse?.parseClean !== undefined ? `parse=${parse.parseClean ? "clean" : "dirty"}` : undefined,
+		diffSummary,
+		typeof metric.wallMs === "number" ? `wall=${metric.wallMs}ms` : undefined,
+	].filter((value): value is string => value !== undefined && value.trim().length > 0);
+	const details: PiBlitzDetails = {
+		status,
+		operation,
+		file,
+		pathLabel: file,
+		ranges: payload.ranges,
+		diffSummary: payload.diffSummary,
+		validation: parse,
+		metrics: metric,
+		summary: summaryParts.join(" · "),
+	};
+	if (context.opLabel !== undefined) details.opLabel = context.opLabel;
+	if (typeof metric.wallMs === "number") {
+		details.durationMs = metric.wallMs;
+		details.wallMs = metric.wallMs;
 	}
-
-	if (!isSavingsCandidate(status, parse) && typeof metric.estimatedPayloadSavedPctVsRealisticAnchor === "number") {
-		chunks.push("savings not claimed (preview/uncertain correctness)");
+	if (typeof metric.estimatedPayloadSavedPctVsRealisticAnchor === "number") {
+		details.savingsPct = metric.estimatedPayloadSavedPctVsRealisticAnchor;
 	}
-
-	return okResult(
-		chunks.join(". ") + ".",
-		{
-			status,
-			operation,
-			file,
-			ranges: payload.ranges,
-			diffSummary: payload.diffSummary,
-			validation: parse,
-			metrics: metric,
-		},
-	);
+	if (diffSummary !== undefined) details.changeLabel = diffSummary;
+	return okResult(contentText, details);
 };
 
 export const parseApplyResultPayload = (stdout: string): ApplyResponsePayload | undefined => {
@@ -681,7 +855,7 @@ class SpawnException {
 const runBlitz = (
 	binary: string,
 	argv: string[],
-	opts: { stdin?: string; cwd: string; timeoutMs: number; signal?: AbortSignal },
+	opts: { stdin?: string; cwd: string; timeoutMs: number; signal?: AbortSignal | undefined },
 ): Effect.Effect<
 	{ stdout: string; stderr: string; exitCode: number },
 	BlitzTimeoutError | BlitzMissingError
@@ -694,9 +868,7 @@ const runBlitz = (
 					cwd: opts.cwd,
 					timeoutMs: opts.timeoutMs,
 					env: {
-						HOME: process.env.HOME ?? "",
-						PATH: process.env.PATH ?? "",
-						XDG_CACHE_HOME: process.env.XDG_CACHE_HOME ?? "",
+						...process.env,
 						FASTEDIT_NO_UPDATE_CHECK: "1",
 						BLITZ_NO_UPDATE_CHECK: "1",
 						BLITZ_WORKSPACE: opts.cwd,
@@ -739,44 +911,60 @@ const executeApplyParams = (
 	binary: string,
 	cwd: string,
 	params: BlitzApplyParams,
+	opts: { signal?: AbortSignal | undefined; onUpdate?: ToolProgressUpdate | undefined } = {},
 ): Promise<BlitzToolResult> => {
-	const eff = Effect.gen(function* () {
-		if (params.operation !== "multi_body" && params.operation !== "patch" && !isNonEmptyString(params.target?.symbol)) {
-			return yield* Effect.fail(
-				new InvalidParamsError({ reason: "target.symbol must be a non-empty string" }),
-			);
-		}
-		const validate = assertApplyPayload(params);
-		if (validate !== null) return yield* Effect.fail(validate);
-		const abs = yield* bindPath(params.file, cwd);
-		const requestPayload = buildApplyRequest(abs, params);
-		const request = JSON.stringify(requestPayload);
-		const tooBig = assertByteCap(request, APPLY_MAX_PAYLOAD, "apply request");
-		if (tooBig !== null) return yield* Effect.fail(tooBig);
-		const argv = ["apply", "--edit", "-", "--json"];
-		if (params.dry_run === true || params.options?.dryRun === true) argv.push("--dry-run");
-		if (params.include_diff === true || params.options?.includeDiff === true) argv.push("--diff");
-		const res = yield* locks.withLock(
-			abs,
-			runBlitz(binary, argv, {
-				stdin: request,
-				cwd,
-				timeoutMs: 60_000,
-			}),
-		);
-		if (res.exitCode === 0) {
-			const parsed = parseApplyResponsePayload(res.stdout);
-			if (parsed !== undefined) {
-				return applyResultToText(parsed as ApplyResponsePayload);
+	const { signal, onUpdate } = opts;
+	const run = async () => {
+		const eff = Effect.gen(function* () {
+			if (params.operation !== "multi_body" && params.operation !== "patch" && !isNonEmptyString(params.target?.symbol)) {
+				return yield* Effect.fail(
+					new InvalidParamsError({ reason: "target.symbol must be a non-empty string" }),
+				);
 			}
-			return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
-		}
-		const soft = classifySoft(res.stdout, res.stderr);
-		return yield* Effect.fail(
-			soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
-		);
-	});
-	return runTool(eff, (v) => v);
+			const validate = assertApplyPayload(params);
+			if (validate !== null) return yield* Effect.fail(validate);
+			const abs = yield* bindPath(params.file, cwd);
+			const requestPayload = buildApplyRequest(abs, params);
+			const request = JSON.stringify(requestPayload);
+			const tooBig = assertByteCap(request, APPLY_MAX_PAYLOAD, "apply request");
+			if (tooBig !== null) return yield* Effect.fail(tooBig);
+			const argv = ["apply", "--edit", "-", "--json"];
+			if (params.dry_run === true || params.options?.dryRun === true) argv.push("--dry-run");
+			if (wantsDiff(params)) argv.push("--diff");
+			const res = yield* locks.withLock(
+				abs,
+				runBlitz(binary, argv, {
+					stdin: request,
+					cwd,
+					timeoutMs: 60_000,
+					signal,
+				}),
+			);
+			if (res.exitCode === 0) {
+				const parsed = parseApplyResponsePayload(res.stdout);
+				if (parsed !== undefined) {
+					const parsedOperation = typeof parsed.operation === "string" ? parsed.operation : params.operation;
+					return applyResultToText(parsed as ApplyResponsePayload, {
+						opLabel: deriveApplyOpLabel(parsedOperation, params),
+						fileLabel: params.file,
+					});
+				}
+				return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
+			}
+			const soft = classifySoft(res.stdout, res.stderr);
+			return yield* Effect.fail(
+				soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
+			);
+		});
+		return runTool(eff, (v) => v);
+	};
+	return runWithProgress(
+		onUpdate,
+		`blitz: running ${params.operation}`,
+		"blitz: done",
+		{ status: "running", operation: params.operation, file: params.file },
+		run,
+	);
 };
 
 export const piBlitzApplyToolDef = (binary: string, cwd: string) =>
@@ -785,9 +973,15 @@ export const piBlitzApplyToolDef = (binary: string, cwd: string) =>
 		label: "blitz apply",
 		description:
 			"Structured v0.2 apply via JSON IR. Use operation enum + target + edit payload. Prefer this for deterministic symbol edits and scoped wraps/insertions.",
+		...blitzRenderers,
 		parameters: applyToolParamsSchema,
-		execute: async (_tcid: string, params: BlitzApplyParams): Promise<BlitzToolResult> =>
-			executeApplyParams(binary, cwd, params),
+		execute: async (
+			_tcid: string,
+			params: BlitzApplyParams,
+			_signal?: AbortSignal,
+			onUpdate?: ToolProgressUpdate,
+			_ctx?: unknown,
+		): Promise<BlitzToolResult> => executeApplyParams(binary, cwd, params, { signal: _signal, onUpdate }),
 	}) as const;
 
 const occurrenceSchema = Type.Optional(
@@ -801,6 +995,7 @@ const narrowApplyBaseSchema = {
 	symbol: Type.String({ minLength: 1, maxLength: 512, description: "Target declaration symbol name only." }),
 	dry_run: Type.Optional(Type.Boolean({ description: "No-write preview request." })),
 	include_diff: Type.Optional(Type.Boolean({ description: "Request diff summary from blitz." })),
+	diff_context: Type.Optional(Type.Number({ minimum: 0, maximum: 24, description: "Unified diff context lines when include_diff is true. Defaults to 12." })),
 };
 
 type NarrowCommonParams = {
@@ -808,6 +1003,7 @@ type NarrowCommonParams = {
 	symbol: string;
 	dry_run?: boolean;
 	include_diff?: boolean;
+	diff_context?: number;
 };
 
 type ReplaceBodySpanParams = NarrowCommonParams & {
@@ -863,6 +1059,7 @@ const toCommonApplyParams = (
 	edit,
 	...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
 	...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
+	...(params.diff_context !== undefined ? { diff_context: params.diff_context } : {}),
 });
 
 export const replaceBodySpanToolDef = (binary: string, cwd: string) =>
@@ -871,13 +1068,14 @@ export const replaceBodySpanToolDef = (binary: string, cwd: string) =>
 		label: "blitz replace body span",
 		description:
 			"Compact structured edit: replace exact text inside a symbol body. Use for medium/large symbols when exact in-body span is known. For tiny unique text edits, core edit may be cheaper.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			find: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Exact text to find inside the symbol body." }),
 			replace: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Replacement text." }),
 			occurrence: occurrenceSchema,
 		}),
-		execute: async (_tcid: string, params: ReplaceBodySpanParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: ReplaceBodySpanParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(
 				binary,
 				cwd,
@@ -886,6 +1084,7 @@ export const replaceBodySpanToolDef = (binary: string, cwd: string) =>
 					replace: params.replace,
 					...(params.occurrence !== undefined ? { occurrence: params.occurrence } : {}),
 				}),
+				{ signal: _signal, onUpdate },
 			),
 	}) as const;
 
@@ -895,6 +1094,7 @@ export const insertBodySpanToolDef = (binary: string, cwd: string) =>
 		label: "blitz insert body span",
 		description:
 			"Compact structured edit: insert text before/after exact text inside a symbol body. Use for structural inserts in large symbols without repeating body text.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			anchor: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Exact anchor text inside the symbol body." }),
@@ -902,7 +1102,7 @@ export const insertBodySpanToolDef = (binary: string, cwd: string) =>
 			text: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Text to insert." }),
 			occurrence: occurrenceSchema,
 		}),
-		execute: async (_tcid: string, params: InsertBodySpanParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: InsertBodySpanParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(
 				binary,
 				cwd,
@@ -912,6 +1112,7 @@ export const insertBodySpanToolDef = (binary: string, cwd: string) =>
 					text: params.text,
 					...(params.occurrence !== undefined ? { occurrence: params.occurrence } : {}),
 				}),
+				{ signal: _signal, onUpdate },
 			),
 	}) as const;
 
@@ -921,13 +1122,14 @@ export const wrapBodyToolDef = (binary: string, cwd: string) =>
 		label: "blitz wrap body",
 		description:
 			"Compact structured edit: wrap an entire symbol body without re-emitting it. Best token-saving path for try/catch, guards, timing wrappers, and similar large-body transforms.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			before: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Text placed before kept body." }),
 			after: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Text placed after kept body." }),
 			indentKeptBodyBy: Type.Optional(Type.Number({ minimum: 0, description: "Spaces to add before each kept body line." })),
 		}),
-		execute: async (_tcid: string, params: WrapBodyParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: WrapBodyParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(
 				binary,
 				cwd,
@@ -937,6 +1139,7 @@ export const wrapBodyToolDef = (binary: string, cwd: string) =>
 					after: params.after,
 					...(params.indentKeptBodyBy !== undefined ? { indentKeptBodyBy: params.indentKeptBodyBy } : {}),
 				}),
+				{ signal: _signal, onUpdate },
 			),
 	}) as const;
 
@@ -946,6 +1149,7 @@ export const composeBodyToolDef = (binary: string, cwd: string) =>
 		label: "blitz compose body",
 		description:
 			"Compact structured edit: compose a symbol body from text segments and kept ranges. Use for multi-hunk/preserve-island edits in medium/large symbols.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			segments: Type.Array(Type.Record(Type.String({ minLength: 1, maxLength: 64 }), Type.Unknown()), {
@@ -954,11 +1158,12 @@ export const composeBodyToolDef = (binary: string, cwd: string) =>
 				description: "Segments: {text:string}, {keep:'body'}, or {keep:{beforeKeep?,afterKeep?,includeBefore?,includeAfter?,occurrence?}}.",
 			}),
 		}),
-		execute: async (_tcid: string, params: ComposeBodyParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: ComposeBodyParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(
 				binary,
 				cwd,
 				toCommonApplyParams(params, "compose_body", { segments: params.segments }),
+				{ signal: _signal, onUpdate },
 			),
 	}) as const;
 
@@ -968,10 +1173,12 @@ export const multiBodyToolDef = (binary: string, cwd: string) =>
 		label: "blitz multi body",
 		description:
 			"Compact structured edit: apply multiple body-scoped edits in one apply request. Use when several symbol-body transforms should stay in one CLI call.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			file: pathSchema,
 			dry_run: Type.Optional(Type.Boolean({ description: "No-write preview request." })),
 			include_diff: Type.Optional(Type.Boolean({ description: "Request diff summary from blitz." })),
+	diff_context: Type.Optional(Type.Number({ minimum: 0, maximum: 24, description: "Unified diff context lines when include_diff is true. Defaults to 12." })),
 			edits: Type.Array(multiBodyEditItemSchema, {
 				minItems: 1,
 				maxItems: BATCH_MAX_ITEMS,
@@ -979,14 +1186,20 @@ export const multiBodyToolDef = (binary: string, cwd: string) =>
 					"Edit entries. replace_body_span uses {symbol,op,find,replace,occurrence?}; insert_body_span uses {symbol,op,anchor,position,text,occurrence?}; wrap_body uses {symbol,op,before,after,indentKeptBodyBy?}.",
 			}),
 		}),
-		execute: async (_tcid: string, params: MultiBodyParams): Promise<BlitzToolResult> =>
-			executeApplyParams(binary, cwd, {
-				file: params.file,
-				operation: "multi_body",
-				edit: { edits: params.edits },
-				...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
-				...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
-			}),
+		execute: async (_tcid: string, params: MultiBodyParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
+			executeApplyParams(
+				binary,
+				cwd,
+				{
+					file: params.file,
+					operation: "multi_body",
+					edit: { edits: params.edits },
+					...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
+					...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
+					...(params.diff_context !== undefined ? { diff_context: params.diff_context } : {}),
+				},
+				{ signal: _signal, onUpdate },
+			),
 	}) as const;
 
 export const patchToolDef = (binary: string, cwd: string) =>
@@ -995,15 +1208,24 @@ export const patchToolDef = (binary: string, cwd: string) =>
 		label: "blitz patch",
 		description:
 			"Compact tuple patch wrapper. Use ops tuples for replace/insert_after/wrap/replace_return/try_catch without repeating full symbol bodies.",
+		...blitzRenderers,
 		parameters: patchToolParamsSchema,
-		execute: async (_tcid: string, params: { file: string; ops: Array<unknown>; dry_run?: boolean; include_diff?: boolean }): Promise<BlitzToolResult> =>
+		execute: async (
+			_tcid: string,
+			params: { file: string; ops: Array<unknown>; dry_run?: boolean; include_diff?: boolean; diff_context?: number },
+			_signal?: AbortSignal,
+			onUpdate?: ToolProgressUpdate,
+			_ctx?: unknown,
+		): Promise<BlitzToolResult> =>
 			executeApplyParams(binary, cwd, {
 				file: params.file,
 				operation: "patch",
 				edit: { ops: params.ops },
 				...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
 				...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
-			}),
+				...(params.diff_context !== undefined ? { diff_context: params.diff_context } : {}),
+			},
+			{ signal: _signal, onUpdate }),
 	}) as const;
 
 export const tryCatchToolDef = (binary: string, cwd: string) =>
@@ -1012,19 +1234,22 @@ export const tryCatchToolDef = (binary: string, cwd: string) =>
 		label: "blitz try catch",
 		description:
 			"Compact semantic edit: wrap a symbol body in TypeScript try/catch without repeating the body. Use for large functions that need catch logging/rethrow logic.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			catchBody: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Catch body, without outer catch braces." }),
 			indent: Type.Optional(Type.Number({ minimum: 0, description: "Spaces to add before each kept body line. Defaults to 2." })),
 		}),
-		execute: async (_tcid: string, params: TryCatchParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: TryCatchParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(binary, cwd, {
 				file: params.file,
 				operation: "patch",
 				edit: { ops: [["try_catch", params.symbol, params.catchBody, ...(params.indent !== undefined ? [params.indent] : [])]] },
 				...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
 				...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
-			}),
+				...(params.diff_context !== undefined ? { diff_context: params.diff_context } : {}),
+			},
+			{ signal: _signal, onUpdate }),
 	}) as const;
 
 export const replaceReturnToolDef = (binary: string, cwd: string) =>
@@ -1033,19 +1258,22 @@ export const replaceReturnToolDef = (binary: string, cwd: string) =>
 		label: "blitz replace return",
 		description:
 			"Compact semantic edit: replace a return statement expression inside a symbol body. Avoids repeating surrounding logic.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			...narrowApplyBaseSchema,
 			expr: Type.String({ minLength: 1, maxLength: SNIPPET_MAX, description: "Return expression, without leading return and without required trailing semicolon." }),
 			occurrence: occurrenceSchema,
 		}),
-		execute: async (_tcid: string, params: ReplaceReturnParams): Promise<BlitzToolResult> =>
+		execute: async (_tcid: string, params: ReplaceReturnParams, _signal?: AbortSignal, onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> =>
 			executeApplyParams(binary, cwd, {
 				file: params.file,
 				operation: "patch",
 				edit: { ops: [["replace_return", params.symbol, params.expr, ...(params.occurrence !== undefined ? [params.occurrence] : [])]] },
 				...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
 				...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
-			}),
+				...(params.diff_context !== undefined ? { diff_context: params.diff_context } : {}),
+			},
+			{ signal: _signal, onUpdate }),
 	}) as const;
 
 export const readToolDef = (binary: string, cwd: string) =>
@@ -1053,14 +1281,16 @@ export const readToolDef = (binary: string, cwd: string) =>
 		name: "pi_blitz_read",
 		label: "blitz read",
 		description: "AST structure summary of a source file (via blitz).",
+		...blitzRenderers,
 		parameters: Type.Object({ file: pathSchema }),
-		execute: async (_tcid: string, params: { file: string }): Promise<BlitzToolResult> => {
+		execute: async (_tcid: string, params: { file: string }, _signal?: AbortSignal, _onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> => {
 			const eff = Effect.gen(function* () {
 				const abs = yield* bindPath(params.file, cwd);
 				// Reads do not mutate — no mutex required.
 				const res = yield* runBlitz(binary, ["read", abs], {
 					cwd,
 					timeoutMs: 30_000,
+					signal: _signal,
 				});
 				if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
 				const soft = classifySoft(res.stdout, res.stderr);
@@ -1079,6 +1309,7 @@ export const editToolDef = (binary: string, cwd: string) =>
 		label: "blitz edit",
 		description:
 			"Symbol-anchored AST edit. `replace` (symbol name) replaces only the body of the named function/class/method and preserves its signature automatically. `after` (symbol name) inserts code after that symbol. Exactly one of those two must be set, and the value must be the SYMBOL NAME, never source code. `snippet` is the new body. For large unchanged bodies, use `// ... existing code ...` or `// @keep` markers and never repeat unchanged code.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			file: pathSchema,
 			snippet: snippetSchema,
@@ -1088,46 +1319,67 @@ export const editToolDef = (binary: string, cwd: string) =>
 		execute: async (
 			_tcid: string,
 			params: { file: string; snippet: string; after?: string; replace?: string },
+			_signal?: AbortSignal,
+			onUpdate?: ToolProgressUpdate,
+			_ctx?: unknown,
 		): Promise<BlitzToolResult> => {
-			const eff = Effect.gen(function* () {
-				const hasAfter = params.after !== undefined && params.after.length > 0;
-				const hasReplace = params.replace !== undefined && params.replace.length > 0;
-				if (hasAfter === hasReplace) {
-					return yield* Effect.fail(
-						new InvalidParamsError({
-							reason: "exactly one of `after` or `replace` must be set",
+			const run = async () => {
+				const eff = Effect.gen(function* () {
+					const hasAfter = params.after !== undefined && params.after.length > 0;
+					const hasReplace = params.replace !== undefined && params.replace.length > 0;
+					if (hasAfter === hasReplace) {
+						return yield* Effect.fail(
+							new InvalidParamsError({
+								reason: "exactly one of `after` or `replace` must be set",
+							}),
+						);
+					}
+					// Runtime byte-length cap (complements TypeBox length cap).
+					const tooBig = assertByteCap(params.snippet, SNIPPET_MAX, "snippet");
+					if (tooBig !== null) return yield* Effect.fail(tooBig);
+					const abs = yield* bindPath(params.file, cwd);
+					const argv = [
+						"edit",
+						abs,
+						"--snippet",
+						"-",
+						hasAfter ? "--after" : "--replace",
+						(hasAfter ? params.after : params.replace)!,
+						"--json",
+					];
+					const res = yield* locks.withLock(
+						abs,
+						runBlitz(binary, argv, {
+							stdin: params.snippet,
+							cwd,
+							timeoutMs: 60_000,
+							signal: _signal,
 						}),
 					);
-				}
-				// Runtime byte-length cap (complements TypeBox length cap).
-				const tooBig = assertByteCap(params.snippet, SNIPPET_MAX, "snippet");
-				if (tooBig !== null) return yield* Effect.fail(tooBig);
-				const abs = yield* bindPath(params.file, cwd);
-				const argv = [
-					"edit",
-					abs,
-					"--snippet",
-					"-",
-					hasAfter ? "--after" : "--replace",
-					(hasAfter ? params.after : params.replace)!,
-					"--json",
-				];
-				const res = yield* locks.withLock(
-					abs,
-					runBlitz(binary, argv, { stdin: params.snippet, cwd, timeoutMs: 60_000 }),
-				);
-				if (res.exitCode === 0) {
-					const metrics = parseEditMetrics(res.stdout);
-					if (metrics) return editMetricsResult(metrics);
-					return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
-				}
-				const soft = classifySoft(res.stdout, res.stderr);
-				return yield* Effect.fail(
-					soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
-				);
-			});
-			return runTool(eff, (v) => v);
-		},
+					if (res.exitCode === 0) {
+						const metrics = parseEditMetrics(res.stdout);
+						if (metrics) return editMetricsResult(metrics);
+						return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
+					}
+					const soft = classifySoft(res.stdout, res.stderr);
+					return yield* Effect.fail(
+						soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
+					);
+				});
+				return runTool(eff, (v) => v);
+			};
+			return runWithProgress(
+				onUpdate,
+				"blitz: running edit",
+				"blitz: done",
+				{
+					status: "running",
+					operation: "edit",
+					file: params.file,
+				},
+				run,
+			);
+			},
 	}) as const;
 
 export const batchToolDef = (binary: string, cwd: string) =>
@@ -1135,6 +1387,7 @@ export const batchToolDef = (binary: string, cwd: string) =>
 		name: "pi_blitz_batch",
 		label: "blitz batch-edit",
 		description: "Multiple symbol-anchored edits in one file.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			file: pathSchema,
 			edits: Type.Array(
@@ -1152,41 +1405,58 @@ export const batchToolDef = (binary: string, cwd: string) =>
 				file: string;
 				edits: Array<{ snippet: string; after?: string; replace?: string }>;
 			},
+			_signal: AbortSignal | undefined,
+			onUpdate: ToolProgressUpdate | undefined,
+			_ctx: unknown,
 		): Promise<BlitzToolResult> => {
-			const eff = Effect.gen(function* () {
-				// Per-edit XOR guard on `after`/`replace`.
-				for (let i = 0; i < params.edits.length; i++) {
-					const e = params.edits[i]!;
-					const hasAfter = e.after !== undefined && e.after.length > 0;
-					const hasReplace = e.replace !== undefined && e.replace.length > 0;
-					if (hasAfter === hasReplace) {
-						return yield* Effect.fail(
-							new InvalidParamsError({
-								reason: `edit[${i}]: exactly one of \`after\` or \`replace\` must be set`,
-							}),
-						);
+			const run = async () => {
+				const eff = Effect.gen(function* () {
+					// Per-edit XOR guard on `after`/`replace`.
+					for (let i = 0; i < params.edits.length; i++) {
+						const e = params.edits[i]!;
+						const hasAfter = e.after !== undefined && e.after.length > 0;
+						const hasReplace = e.replace !== undefined && e.replace.length > 0;
+						if (hasAfter === hasReplace) {
+							return yield* Effect.fail(
+								new InvalidParamsError({
+									reason: `edit[${i}]: exactly one of \`after\` or \`replace\` must be set`,
+								}),
+							);
+						}
 					}
-				}
-				const json = JSON.stringify(params.edits);
-				const tooBig = assertByteCap(json, BATCH_MAX_AGGREGATE, "batch");
-				if (tooBig !== null) return yield* Effect.fail(tooBig);
-				const abs = yield* bindPath(params.file, cwd);
-				const res = yield* locks.withLock(
-					abs,
-					runBlitz(binary, ["batch-edit", abs, "--edits", "-"], {
-						stdin: json,
-						cwd,
-						timeoutMs: 120_000,
-					}),
-				);
-				if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
-				const soft = classifySoft(res.stdout, res.stderr);
-				return yield* Effect.fail(
-					soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
-				);
-			});
-			return runTool(eff, (v) => v);
-		},
+					const json = JSON.stringify(params.edits);
+					const tooBig = assertByteCap(json, BATCH_MAX_AGGREGATE, "batch");
+					if (tooBig !== null) return yield* Effect.fail(tooBig);
+					const abs = yield* bindPath(params.file, cwd);
+					const res = yield* locks.withLock(
+						abs,
+						runBlitz(binary, ["batch-edit", abs, "--edits", "-"], {
+							stdin: json,
+							cwd,
+							timeoutMs: 120_000,
+							signal: _signal,
+						}),
+					);
+					if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
+					const soft = classifySoft(res.stdout, res.stderr);
+					return yield* Effect.fail(
+						soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
+					);
+				});
+				return runTool(eff, (v) => v);
+			};
+			return runWithProgress(
+				onUpdate,
+				"blitz: running batch",
+				"blitz: done",
+				{
+					status: "running",
+					operation: "batch",
+					file: params.file,
+				},
+				run,
+			);
+			},
 	}) as const;
 
 export const renameToolDef = (binary: string, cwd: string) =>
@@ -1194,6 +1464,7 @@ export const renameToolDef = (binary: string, cwd: string) =>
 		name: "pi_blitz_rename",
 		label: "blitz rename",
 		description: "AST-verified single-file rename. Skips strings/comments/docstrings.",
+		...blitzRenderers,
 		parameters: Type.Object({
 			file: pathSchema,
 			old_name: renameSymbolSchema,
@@ -1203,25 +1474,41 @@ export const renameToolDef = (binary: string, cwd: string) =>
 		execute: async (
 			_tcid: string,
 			params: { file: string; old_name: string; new_name: string; dry_run?: boolean },
+			_signal: AbortSignal | undefined,
+			onUpdate: ToolProgressUpdate | undefined,
+			_ctx: unknown,
 		): Promise<BlitzToolResult> => {
-			const eff = Effect.gen(function* () {
-				const abs = yield* bindPath(params.file, cwd);
-				const argv = ["rename", abs, params.old_name, params.new_name];
-				if (params.dry_run === true) argv.push("--dry-run");
-				// Dry-run does not mutate; real rename acquires lock.
-				const run = runBlitz(binary, argv, { cwd, timeoutMs: 60_000 });
-				const res =
-					params.dry_run === true
-						? yield* run
-						: yield* locks.withLock(abs, run);
-				if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
-				const soft = classifySoft(res.stdout, res.stderr);
-				return yield* Effect.fail(
-					soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
-				);
-			});
-			return runTool(eff, (v) => v);
-		},
+			const run = async () => {
+				const eff = Effect.gen(function* () {
+					const abs = yield* bindPath(params.file, cwd);
+					const argv = ["rename", abs, params.old_name, params.new_name];
+					if (params.dry_run === true) argv.push("--dry-run");
+					// Dry-run does not mutate; real rename acquires lock.
+					const runBlitzCall = runBlitz(binary, argv, { cwd, timeoutMs: 60_000, signal: _signal });
+					const res =
+						params.dry_run === true
+							? yield* runBlitzCall
+							: yield* locks.withLock(abs, runBlitzCall);
+					if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
+					const soft = classifySoft(res.stdout, res.stderr);
+					return yield* Effect.fail(
+						soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
+					);
+				});
+				return runTool(eff, (v) => v);
+			};
+			return runWithProgress(
+				onUpdate,
+				"blitz: running rename",
+				"blitz: done",
+				{
+					status: "running",
+					operation: "rename",
+					file: params.file,
+				},
+				run,
+			);
+			},
 	}) as const;
 
 export const undoToolDef = (binary: string, cwd: string) =>
@@ -1229,6 +1516,7 @@ export const undoToolDef = (binary: string, cwd: string) =>
 		name: "pi_blitz_undo",
 		label: "blitz undo",
 		description: "Revert the last blitz edit to a file (single-depth per path).",
+		...blitzRenderers,
 		parameters: Type.Object({
 			file: pathSchema,
 			confirm: Type.Literal(true, {
@@ -1238,26 +1526,42 @@ export const undoToolDef = (binary: string, cwd: string) =>
 		execute: async (
 			_tcid: string,
 			params: { file: string; confirm: true },
+			_signal: AbortSignal | undefined,
+			onUpdate: ToolProgressUpdate | undefined,
+			_ctx: unknown,
 		): Promise<BlitzToolResult> => {
-			const eff = Effect.gen(function* () {
-				if (params.confirm !== true) {
-					return yield* Effect.fail(
-						new InvalidParamsError({ reason: "confirm must be true" }),
+			const run = async () => {
+				const eff = Effect.gen(function* () {
+					if (params.confirm !== true) {
+						return yield* Effect.fail(
+							new InvalidParamsError({ reason: "confirm must be true" }),
+						);
+					}
+					const abs = yield* bindPath(params.file, cwd);
+					const res = yield* locks.withLock(
+						abs,
+						runBlitz(binary, ["undo", abs], { cwd, timeoutMs: 30_000, signal: _signal }),
 					);
-				}
-				const abs = yield* bindPath(params.file, cwd);
-				const res = yield* locks.withLock(
-					abs,
-					runBlitz(binary, ["undo", abs], { cwd, timeoutMs: 30_000 }),
-				);
-				if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
-				const soft = classifySoft(res.stdout, res.stderr);
-				return yield* Effect.fail(
-					soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
-				);
-			});
-			return runTool(eff, (v) => v);
-		},
+					if (res.exitCode === 0) return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
+					const soft = classifySoft(res.stdout, res.stderr);
+					return yield* Effect.fail(
+						soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
+					);
+				});
+				return runTool(eff, (v) => v);
+			};
+			return runWithProgress(
+				onUpdate,
+				"blitz: running undo",
+				"blitz: done",
+				{
+					status: "running",
+					operation: "undo",
+					file: params.file,
+				},
+				run,
+			);
+			},
 	}) as const;
 
 export const doctorToolDef = (binary: string, cwd: string) =>
@@ -1265,10 +1569,11 @@ export const doctorToolDef = (binary: string, cwd: string) =>
 		name: "pi_blitz_doctor",
 		label: "blitz doctor",
 		description: "Report blitz version, supported grammars, and backup cache health.",
+		...blitzRenderers,
 		parameters: Type.Object({}),
-		execute: async (): Promise<BlitzToolResult> => {
+		execute: async (_tcid: string, _params: unknown, _signal?: AbortSignal, _onUpdate?: ToolProgressUpdate, _ctx?: unknown): Promise<BlitzToolResult> => {
 			const eff = Effect.gen(function* () {
-				const res = yield* runBlitz(binary, ["doctor"], { cwd, timeoutMs: 10_000 });
+				const res = yield* runBlitz(binary, ["doctor"], { cwd, timeoutMs: 10_000, signal: _signal });
 				if (res.exitCode === 0) return okResult(res.stdout.trimEnd());
 				const soft = classifySoft(res.stdout, res.stderr);
 				return yield* Effect.fail(

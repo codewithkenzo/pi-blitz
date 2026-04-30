@@ -33,11 +33,17 @@ export interface PiBlitzDetails {
 	realisticContextLines?: number;
 	usedMarkers?: boolean;
 	wallMs?: number;
+	pathLabel?: string;
+	opLabel?: string;
+	changeLabel?: string;
+	durationMs?: number;
+	savingsPct?: number;
 	ranges?: unknown;
 	diffSummary?: unknown;
 	validation?: unknown;
 	metrics?: unknown;
 	operation?: string;
+	summary?: string;
 }
 
 export interface BlitzToolResult {
@@ -67,10 +73,11 @@ export const runTool = async <A>(
 	if (errOpt._tag === "Some") {
 		const err = errOpt.value;
 		if (err._tag === "BlitzSoftError") {
-			const details: PiBlitzDetails = { reason: err.reason };
+			const detailText = renderSoftText(err);
+			const details: PiBlitzDetails = { reason: err.reason, summary: formatSoftReason(err.reason) };
 			if (err.suggest !== undefined) details.suggest = err.suggest;
 			return {
-				content: [{ type: "text" as const, text: renderSoftText(err) }],
+				content: [{ type: "text" as const, text: detailText }],
 				isError: true,
 				details,
 			};
@@ -81,9 +88,42 @@ export const runTool = async <A>(
 	throw new Error(`pi-blitz failed: ${Cause.pretty(exit.cause)}`);
 };
 
+const SOFT_LINE_MAX = 200;
+const SOFT_TEXT_MAX = 350;
+
+const clamp = (text: string, maxChars: number): string => {
+	if (text.length <= maxChars) return text;
+	if (maxChars <= 3) return text.slice(0, maxChars);
+	return `${text.slice(0, maxChars - 3)}...`;
+};
+
+const formatSoftReason = (reason: string): string => {
+	switch (reason) {
+		case "no-undo-history":
+			return "undo history missing";
+		case "no-occurrences":
+			return "symbol not found";
+		case "no-references":
+			return "no references";
+		case "no-backup":
+			return "no backup";
+		case "no-changes":
+			return "no changes";
+		case "empty-results":
+			return "no matches";
+		default:
+			return "blitz miss";
+	}
+};
+
 const renderSoftText = (err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>): string => {
-	const suggest = err.suggest ? `\nsuggest: ${err.suggest}` : "";
-	return `pi-blitz ${err.reason}: ${err.stderr.trim()}${suggest}`;
+	const firstLine = (err.stderr ?? "").split(/\r?\n/)[0]?.trim() ?? "";
+	const lines: string[] = [
+		`blitz miss: ${formatSoftReason(err.reason)}`,
+		...(firstLine.length > 0 ? [`detail: ${clamp(firstLine, SOFT_LINE_MAX)}`] : []),
+		...(err.suggest !== undefined ? [`next: ${err.suggest}`] : []),
+	];
+	return clamp(lines.join("\n"), SOFT_TEXT_MAX);
 };
 
 const renderHardText = (err: PiBlitzError): string => {

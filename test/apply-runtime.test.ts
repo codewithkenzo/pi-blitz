@@ -30,6 +30,25 @@ await mock.module("../src/spawn.js", () => ({
 
 const tools = await import("../src/tools.js");
 
+const setSpawnResponse = (response: {
+	status: string;
+	operation: string;
+	file: string;
+	validation?: { parseClean?: boolean; parseErrorCount?: number };
+	metrics?: {
+		estimatedPayloadSavedPctVsRealisticAnchor?: number;
+		estimatedTokensSavedBytesDiv4VsRealisticAnchor?: number;
+		wallMs?: number;
+	};
+	diffSummary?: string;
+}, options?: { exitCode?: number; stderr?: string }) => {
+	spawnCollectMock.mockImplementation(async () => ({
+		stdout: JSON.stringify(response),
+		stderr: options?.stderr ?? "",
+		exitCode: options?.exitCode ?? 0,
+		durationMs: 10,
+	}));
+};
 describe("pi_blitz_apply runtime path", () => {
 	let tmpDir = "";
 	let file = "";
@@ -180,11 +199,12 @@ describe("pi_blitz_apply runtime path", () => {
 			},
 			dry_run: true,
 			include_diff: true,
+			diff_context: 4,
 		});
 
 		expect(result.isError).toBeUndefined();
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		expect(result.content[0]?.text).toContain("status=applied");
+		expect(result.content[0]?.text).toContain("blitz patch applied:");
 
 		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
 		expect(firstCall).toBeDefined();
@@ -198,6 +218,254 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(payload.target.symbol).toBe("foo");
 		expect(payload.edit).toEqual({ find: "return 1;", replace: "return 2;" });
 		expect(payload.options.dryRun).toBe(true);
+		expect(payload.options.diffContext).toBe(4);
+	});
+
+	test("diff context requires include_diff", async () => {
+		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
+		await tool.execute("1", {
+			file: "app.ts",
+			operation: "replace_body_span",
+			target: { symbol: "foo" },
+			edit: { find: "return 1;", replace: "return 2;" },
+			diff_context: 4,
+		});
+
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		expect(firstCall[0]).not.toContain("--diff");
+		const payload = JSON.parse(firstCall[1].stdin);
+		expect(payload.options.diffContext).toBeUndefined();
+	});
+
+	test("include_diff defaults diff context to 12", async () => {
+		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
+		await tool.execute("1", {
+			file: "app.ts",
+			operation: "replace_body_span",
+			target: { symbol: "foo" },
+			edit: { find: "return 1;", replace: "return 2;" },
+			include_diff: true,
+		});
+
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		expect(firstCall[0]).toContain("--diff");
+		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.options.diffContext).toBe(12);
+	});
+
+	test("options includeDiff accepts camelCase diffContext", async () => {
+		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
+		await tool.execute("1", {
+			file: "app.ts",
+			operation: "replace_body_span",
+			target: { symbol: "foo" },
+			edit: { find: "return 1;", replace: "return 2;" },
+			options: { includeDiff: true, diffContext: 2 },
+		});
+
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		expect(firstCall[0]).toContain("--diff");
+		const payload = JSON.parse(firstCall[1].stdin);
+		expect(payload.options.diffContext).toBe(2);
+	});
+
+	test("hard failure emits failed update", async () => {
+		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
+		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: { status?: string } }> = [];
+		await expect(tool.execute(
+			"1",
+			{
+				file: "app.ts",
+				operation: "replace_body_span",
+				target: { symbol: "" },
+				edit: { find: "return 1;", replace: "return 2;" },
+			},
+			undefined,
+			(update) => updates.push(update as { content: Array<{ type: string; text?: string }>; details?: { status?: string } }),
+		)).rejects.toThrow("InvalidParamsError");
+
+		expect(updates.at(-1)?.content[0]?.text).toBe("blitz: failed");
+		expect(updates.at(-1)?.details?.status).toBe("failed");
+	});
+
+	test("formats apply applied result compactly", async () => {
+		setSpawnResponse({
+			status: "applied",
+			operation: "replace_return",
+			file: "src/app.ts",
+			validation: { parseClean: true, parseErrorCount: 0 },
+			metrics: {
+				estimatedPayloadSavedPctVsRealisticAnchor: 72,
+				estimatedTokensSavedBytesDiv4VsRealisticAnchor: 102,
+				wallMs: 39,
+			},
+			diffSummary: "+6/-1",
+		});
+		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			file: "app.ts",
+			operation: "replace_body_span",
+			target: { symbol: "computeTotal" },
+			edit: {
+				find: "old()",
+				replace: "new()",
+			},
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text.split("\n").length).toBeLessThanOrEqual(5);
+		expect(result.content[0]?.text).toContain("blitz patch applied: src/app.ts");
+		expect(result.content[0]?.text).toContain("op: replace_return(computeTotal)");
+		expect(result.content[0]?.text).toContain("parse: clean");
+		expect(result.content[0]?.text).toContain("changed: +6/-1 · wall: 39ms");
+		expect(result.content[0]?.text).toContain("saved: ~72% payload vs realistic-anchor edit");
+		expect(result.content[0]?.text.length).toBeLessThanOrEqual(450);
+		expect(result.details?.summary).toBeDefined();
+	});
+
+	test("excludes savings for preview", async () => {
+		setSpawnResponse({
+			status: "preview",
+			operation: "replace_body_span",
+			file: "src/app.ts",
+			validation: { parseClean: true, parseErrorCount: 0 },
+			metrics: {
+				estimatedPayloadSavedPctVsRealisticAnchor: 72,
+				wallMs: 17,
+			},
+			diffSummary: "+2/-0",
+		});
+		const tool = tools.replaceBodySpanToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			file: "app.ts",
+			symbol: "foo",
+			find: "old();",
+			replace: "new();",
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("blitz patch preview: src/app.ts");
+		expect(result.content[0]?.text).not.toContain("saved:");
+		expect(result.details?.summary).toBeDefined();
+	});
+
+	test("omits savings on dirty parse", async () => {
+		setSpawnResponse({
+			status: "applied",
+			operation: "replace_body_span",
+			file: "src/app.ts",
+			validation: { parseClean: false, parseErrorCount: 3 },
+			metrics: {
+				estimatedPayloadSavedPctVsRealisticAnchor: 90,
+				wallMs: 16,
+			},
+			diffSummary: "+1/-1",
+		});
+		const tool = tools.replaceBodySpanToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			file: "app.ts",
+			symbol: "foo",
+			find: "old();",
+			replace: "new();",
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).not.toContain("saved:");
+		expect(result.content[0]?.text).toContain("parse: dirty (3 parse errors)");
+		expect(result.content[0]?.text).toContain("blitz patch applied: src/app.ts");
+	});
+
+	test("tightens soft error text and details.summary", async () => {
+		setSpawnResponse(
+			{
+				status: "applied",
+				operation: "replace_return",
+				file: "src/app.ts",
+			},
+			{ exitCode: 1, stderr: "No occurrences of handleRequest\nsecond line" },
+		);
+		const tool = tools.replaceReturnToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			file: "app.ts",
+			symbol: "handleRequest",
+			expr: "value",
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("blitz miss: symbol not found");
+		expect(result.content[0]?.text).not.toContain("second line");
+		expect(result.content[0]?.text).toContain("next: run pi_blitz_read or use core edit");
+		expect(result.content[0]?.text.length).toBeLessThanOrEqual(350);
+		expect(result.details?.summary).toBeDefined();
+	});
+
+	test("summarizes multi-operation patch response", async () => {
+		setSpawnResponse({
+			status: "applied",
+			operation: "patch",
+			file: "src/app.ts",
+			validation: { parseClean: true, parseErrorCount: 0 },
+			metrics: {
+				estimatedPayloadSavedPctVsRealisticAnchor: 55,
+				wallMs: 31,
+			},
+			diffSummary: "+4/-2",
+		});
+		const tool = tools.patchToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			file: "app.ts",
+			ops: [
+				["replace", "foo", "x", "y", "first"],
+				["replace_return", "bar", "value + 1", "last"],
+				["try_catch", "baz", "console.error(error);", 1],
+			],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("op: patch(replace(foo), replace_return(bar), try_catch(baz))");
+		expect(result.content[0]?.text.split("\n").length).toBeLessThanOrEqual(5);
+	});
+
+	test("single-file mutation emits compact running and done updates", async () => {
+		setSpawnResponse({
+			status: "applied",
+			operation: "replace_body_span",
+			file: "src/app.ts",
+			validation: { parseClean: true },
+			metrics: { wallMs: 12 },
+			diffSummary: "+1/-1",
+		});
+		const tool = tools.replaceBodySpanToolDef("blitz", tmpDir);
+		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
+		await tool.execute(
+			"1",
+			{
+				file: "app.ts",
+				symbol: "foo",
+				find: "old();",
+				replace: "new();",
+			},
+			undefined,
+			(update) => updates.push(update),
+			{},
+		);
+
+		expect(updates).toHaveLength(2);
+		expect(updates[0]?.content[0]?.text).toBe("blitz: running replace_body_span");
+		expect(updates[1]?.content[0]?.text).toBe("blitz: done");
+		expect(updates.every((update) => (update.content[0]?.text?.length ?? 0) <= 120)).toBe(true);
+	});
+
+	test("read emits no progress updates", async () => {
+		spawnCollectMock.mockImplementation(async () => ({
+			stdout: "function foo L1-L1\n",
+			stderr: "",
+			exitCode: 0,
+			durationMs: 10,
+		}));
+		const tool = tools.readToolDef("blitz", tmpDir);
+		const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
+		await tool.execute("1", { file: "app.ts" }, undefined, (update) => updates.push(update), {});
+		expect(updates).toHaveLength(0);
 	});
 });
