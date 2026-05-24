@@ -34,12 +34,15 @@ export type BlitzSoftReason =
 	| "no-backup"
 	| "no-changes"
 	| "empty-results"
+	| "apply-rejected"
 	| "blitz-error";
 
 export class BlitzSoftError extends Data.TaggedError("BlitzSoftError")<{
 	readonly reason: BlitzSoftReason;
 	readonly stderr: string;
 	readonly suggest?: string;
+	readonly code?: string;
+	readonly status?: string;
 }> {}
 
 export type PiBlitzError =

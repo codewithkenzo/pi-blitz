@@ -386,6 +386,12 @@ const editMetricsResult = (metrics: EditMetrics): BlitzToolResult => {
 };
 
 const classifySuccessStdout = (stdout: string): BlitzToolResult["details"] => {
+	const parsed = parseApplyResponsePayload(stdout);
+	if (parsed?.status === "needs_host_merge") {
+		const details: BlitzToolResult["details"] = { status: "needs_host_merge", parseFallback: true };
+		if (typeof parsed.code === "string" && parsed.code.trim().length > 0) details.code = parsed.code.trim();
+		return details;
+	}
 	if (/^needs_host_merge\b/m.test(stdout) || stdout.trim().startsWith('{"status":"needs_host_merge"')) {
 		return { status: "needs_host_merge", parseFallback: true };
 	}
@@ -690,6 +696,7 @@ type ApplyResponseValidation = {
 
 type ApplyResponsePayload = {
 	status?: string;
+	code?: string;
 	operation?: string;
 	file?: string;
 	validation?: ApplyResponseValidation;
@@ -797,6 +804,7 @@ type ApplyFormatContext = {
 
 const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatContext = {}): BlitzToolResult => {
 	const status = payload.status ?? "unknown";
+	const code = typeof payload.code === "string" && payload.code.trim().length > 0 ? payload.code.trim() : undefined;
 	const operation = payload.operation ?? "unknown";
 	const file = payload.file ?? context.fileLabel ?? "(unknown)";
 	const metric = payload.metrics ?? {};
@@ -804,6 +812,7 @@ const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatCo
 	const diffSummary = formatDiffSummary(payload.diffSummary);
 	const lines: string[] = [];
 	lines.push(formatBlitzStatusLine(status, file));
+	if (code !== undefined) lines.push(`code: ${code}`);
 	const opLine = formatOpLabel(operation, context.opLabel);
 	if (opLine !== undefined) lines.push(opLine);
 	const parseLine = formatParseLine(parse);
@@ -815,6 +824,7 @@ const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatCo
 	const contentText = lines.join("\n");
 	const summaryParts = [
 		`status=${status}`,
+		code !== undefined ? `code=${code}` : undefined,
 		context.opLabel !== undefined ? context.opLabel : operation,
 		parse?.parseClean !== undefined ? `parse=${parse.parseClean ? "clean" : "dirty"}` : undefined,
 		diffSummary,
@@ -822,6 +832,7 @@ const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatCo
 	].filter((value): value is string => value !== undefined && value.trim().length > 0);
 	const details: PiBlitzDetails = {
 		status,
+		...(code !== undefined ? { code } : {}),
 		operation,
 		file,
 		pathLabel: file,
@@ -846,6 +857,20 @@ const applyResultToText = (payload: ApplyResponsePayload, context: ApplyFormatCo
 export const parseApplyResultPayload = (stdout: string): ApplyResponsePayload | undefined => {
 	const parsed = parseApplyResponsePayload(stdout);
 	return typeof parsed === "undefined" ? undefined : (parsed as ApplyResponsePayload);
+};
+
+const classifyApplyFailure = (stdout: string, stderr: string): BlitzSoftError | undefined => {
+	const parsed = parseApplyResponsePayload(stdout);
+	if (parsed?.status === "rejected") {
+		const code = typeof parsed.code === "string" && parsed.code.trim().length > 0 ? parsed.code.trim() : undefined;
+		return new BlitzSoftError({
+			reason: "apply-rejected",
+			stderr,
+			...(code !== undefined ? { code } : {}),
+			status: parsed.status,
+		});
+	}
+	return classifySoft(stdout, stderr);
 };
 
 class SpawnException {
@@ -951,7 +976,7 @@ const executeApplyParams = (
 				}
 				return okResult(res.stdout.trimEnd(), classifySuccessStdout(res.stdout));
 			}
-			const soft = classifySoft(res.stdout, res.stderr);
+			const soft = classifyApplyFailure(res.stdout, res.stderr);
 			return yield* Effect.fail(
 				soft ?? new BlitzSoftError({ reason: "blitz-error", stderr: res.stderr }),
 			);

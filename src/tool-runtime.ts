@@ -8,6 +8,7 @@ export interface PiBlitzDetails {
 	partial?: boolean;
 	degraded?: boolean;
 	status?: string;
+	code?: string;
 	parseFallback?: boolean;
 	lane?: string;
 	mode?: string;
@@ -74,8 +75,13 @@ export const runTool = async <A>(
 		const err = errOpt.value;
 		if (err._tag === "BlitzSoftError") {
 			const detailText = renderSoftText(err);
-			const details: PiBlitzDetails = { reason: err.reason, summary: formatSoftReason(err.reason) };
+			const summaryParts = [formatSoftReason(err.reason)];
+			if (err.status !== undefined) summaryParts.push(`status=${err.status}`);
+			if (err.code !== undefined) summaryParts.push(`code=${err.code}`);
+			const details: PiBlitzDetails = { reason: err.reason, summary: summaryParts.join(" · ") };
 			if (err.suggest !== undefined) details.suggest = err.suggest;
+			if (err.status !== undefined) details.status = err.status;
+			if (err.code !== undefined) details.code = err.code;
 			return {
 				content: [{ type: "text" as const, text: detailText }],
 				isError: true,
@@ -111,6 +117,8 @@ const formatSoftReason = (reason: string): string => {
 			return "no changes";
 		case "empty-results":
 			return "no matches";
+		case "apply-rejected":
+			return "apply rejected";
 		default:
 			return "blitz miss";
 	}
@@ -118,11 +126,11 @@ const formatSoftReason = (reason: string): string => {
 
 const renderSoftText = (err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>): string => {
 	const firstLine = (err.stderr ?? "").split(/\r?\n/)[0]?.trim() ?? "";
-	const lines: string[] = [
-		`blitz miss: ${formatSoftReason(err.reason)}`,
-		...(firstLine.length > 0 ? [`detail: ${clamp(firstLine, SOFT_LINE_MAX)}`] : []),
-		...(err.suggest !== undefined ? [`next: ${err.suggest}`] : []),
-	];
+	const lines: string[] = [`blitz miss: ${formatSoftReason(err.reason)}`];
+	if (err.status !== undefined) lines.push(`status: ${err.status}`);
+	if (err.code !== undefined) lines.push(`code: ${err.code}`);
+	if (firstLine.length > 0) lines.push(`detail: ${clamp(firstLine, SOFT_LINE_MAX)}`);
+	if (err.suggest !== undefined) lines.push(`next: ${err.suggest}`);
 	return clamp(lines.join("\n"), SOFT_TEXT_MAX);
 };
 
