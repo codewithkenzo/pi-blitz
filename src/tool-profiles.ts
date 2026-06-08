@@ -57,7 +57,7 @@ const PROFILE_TOOLS = {
 export const PI_BLITZ_TOOL_PROFILES = Object.keys(PROFILE_TOOLS) as PiBlitzToolProfile[];
 
 export const resolvePiBlitzToolProfile = (value: string | undefined): PiBlitzToolProfile => {
-	if (value === undefined || value === "") return "full";
+	if (value === undefined || value === "") return "minimal";
 	if (PI_BLITZ_TOOL_PROFILES.includes(value as PiBlitzToolProfile)) return value as PiBlitzToolProfile;
 	throw new Error(`invalid PI_BLITZ_TOOL_PROFILE=${value}; expected ${PI_BLITZ_TOOL_PROFILES.join("|")}`);
 };

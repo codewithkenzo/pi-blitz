@@ -15,7 +15,7 @@ const arg = (name: string, fallback = "") => {
 	return item.includes("=") ? item.split("=")[1]! : args[idx + 1] ?? fallback;
 };
 
-const profileArg = arg("--profile", process.env.PI_BLITZ_TOOL_PROFILE ?? "full");
+const profileArg = arg("--profile", process.env.PI_BLITZ_TOOL_PROFILE ?? "minimal");
 const out = arg("--out", "");
 const cwd = resolve(arg("--cwd", process.cwd()));
 const binary = arg("--binary", process.env.BLITZ_BIN ?? "blitz");
