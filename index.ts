@@ -4,22 +4,10 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./src/config.js";
 import {
-	batchToolDef,
-	composeBodyToolDef,
-	doctorToolDef,
-	editToolDef,
-	insertBodySpanToolDef,
-	multiBodyToolDef,
-	patchToolDef,
-	tryCatchToolDef,
-	replaceReturnToolDef,
-	piBlitzApplyToolDef,
-	readToolDef,
-	replaceBodySpanToolDef,
-	wrapBodyToolDef,
-	renameToolDef,
-	undoToolDef,
-} from "./src/tools.js";
+	getProfiledToolDefs,
+	profileLabel,
+	resolvePiBlitzToolProfile,
+} from "./src/tool-profiles.js";
 
 const baseDir = dirname(fileURLToPath(import.meta.url));
 
@@ -40,22 +28,12 @@ export default async function piBlitz(pi: ExtensionAPI): Promise<void> {
 	const cwd = typeof process.cwd === "function" ? process.cwd() : baseDir;
 	const config = loadConfig(cwd);
 	const binary = config.binary ?? "blitz";
+	const profile = resolvePiBlitzToolProfile(process.env.PI_BLITZ_TOOL_PROFILE);
 
-	pi.registerTool(readToolDef(binary, cwd));
-	pi.registerTool(editToolDef(binary, cwd));
-	pi.registerTool(batchToolDef(binary, cwd));
-	pi.registerTool(piBlitzApplyToolDef(binary, cwd));
-	pi.registerTool(replaceBodySpanToolDef(binary, cwd));
-	pi.registerTool(insertBodySpanToolDef(binary, cwd));
-	pi.registerTool(wrapBodyToolDef(binary, cwd));
-	pi.registerTool(composeBodyToolDef(binary, cwd));
-	pi.registerTool(multiBodyToolDef(binary, cwd));
-	pi.registerTool(patchToolDef(binary, cwd));
-	pi.registerTool(tryCatchToolDef(binary, cwd));
-	pi.registerTool(replaceReturnToolDef(binary, cwd));
-	pi.registerTool(renameToolDef(binary, cwd));
-	pi.registerTool(undoToolDef(binary, cwd));
-	pi.registerTool(doctorToolDef(binary, cwd));
+	for (const tool of getProfiledToolDefs(binary, cwd, profile)) {
+		pi.registerTool(tool);
+	}
+	console.warn(`[pi-blitz] tool profile ${profileLabel(profile)} registered`);
 
 	if (!state.skillsAnnounced) {
 		const sourceSkillDir = join(baseDir, "skills", "pi-blitz");
