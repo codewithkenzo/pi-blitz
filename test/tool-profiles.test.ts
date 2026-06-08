@@ -11,7 +11,8 @@ import {
 const originalProfileEnv = process.env.PI_BLITZ_TOOL_PROFILE;
 
 afterEach(() => {
-	if (originalProfileEnv === undefined) delete process.env.PI_BLITZ_TOOL_PROFILE;
+	if (originalProfileEnv === undefined)
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
 	else process.env.PI_BLITZ_TOOL_PROFILE = originalProfileEnv;
 });
 
@@ -112,6 +113,8 @@ describe("pi-blitz tool profiles", () => {
 	});
 
 	test("invalid profile fails closed", () => {
-		expect(() => resolvePiBlitzToolProfile("bad")).toThrow(/invalid PI_BLITZ_TOOL_PROFILE/);
+		expect(() => resolvePiBlitzToolProfile("bad")).toThrow(
+			/invalid PI_BLITZ_TOOL_PROFILE/,
+		);
 	});
 });
