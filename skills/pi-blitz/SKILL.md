@@ -1,82 +1,49 @@
 ---
 name: pi-blitz
-description: Compact Blitz AST edit profile. Use for symbol/body edits likely cheaper than core. Tiny/plain text edits often favor core/apply_patch. Never claim savings without benchmark proof.
+description: Minimal Blitz AST edit routing. Use only when symbol/body edit likely cheaper than core; otherwise core/apply_patch. Savings require benchmark proof.
 ---
 
-# pi-blitz compact resident skill
+# pi-blitz
 
-Blitz is not universal core-edit replacement. Choose cheapest safe route.
+Not universal core replacement. Pick cheapest safe route.
 
-## Route rule
+## Route
 
-Use core/apply_patch when:
-- tiny one-line/plain text edit
-- unsupported language/path
-- whole-file rewrite
-- exact oldText/newText is shorter than Blitz args
-- unsure symbol target
+Core/apply_patch if tiny text edit, whole-file rewrite, unsupported file, unclear symbol, or exact old/new is shorter than Blitz args.
 
-Use Blitz when:
-- edit targets symbol/function/method/body
-- large unchanged body can be preserved
-- structural multi-op/try-catch/return edit avoids repeating code
-- benchmark/profile evidence says Blitz wins
+Blitz if target is symbol/function/method body, unchanged body is large, multi-op structural edit avoids replay, or benchmark evidence says Blitz wins.
 
-Savings count only when row correct, token-accounted, Tokscale-matched, and route chosen by measured proof. Failed/caveated rows count as evidence, not savings.
+Count savings only for correct, Tokscale-matched rows where chosen route is cheaper. Failed/caveated rows are evidence only.
 
 ## Profiles
 
-`PI_BLITZ_TOOL_PROFILE` controls visible schemas:
-- `minimal`: `pi_blitz_patch` only (`minimal-v0` label)
-- `semantic`: `pi_blitz_patch`, `pi_blitz_try_catch`, `pi_blitz_replace_return`
-- `structural`: `pi_blitz_replace_body_span`, `pi_blitz_multi_body`, `pi_blitz_patch`
+`PI_BLITZ_TOOL_PROFILE`:
+- `minimal`: `pi_blitz_patch` (`minimal-v0`)
+- `semantic`: patch + try_catch + replace_return
+- `structural`: replace_body_span + multi_body + patch
 - `admin`: read/rename/undo/doctor
 - `full`: all tools for debug/backcompat
 
 ## Tool choice
 
-Prefer narrowest visible tool:
-- tail/span replace → `pi_blitz_replace_body_span`
-- multiple body edits → `pi_blitz_multi_body`
-- tuple ops / compact mixed structural route → `pi_blitz_patch`
-- wrap function/method body → `pi_blitz_try_catch` or patch `try_catch`
-- replace specific return expression → `pi_blitz_replace_return` or patch `replace_return`
-- inspect/undo/debug → admin/full only
+Use narrowest visible tool:
+- span/tail replace → `pi_blitz_replace_body_span`
+- many body edits → `pi_blitz_multi_body`
+- tuple/mixed route → `pi_blitz_patch`
+- try/catch wrap → `pi_blitz_try_catch` or patch `try_catch`
+- return edit → `pi_blitz_replace_return` or patch `replace_return`
 
-## Compact patch tuple forms
-
-Use `pi_blitz_patch` with shortest valid tuple ops:
+Patch tuple ops:
 - `["replace_body_span", symbol, find, replace, occurrence?]`
 - `["insert_body_span", symbol, anchor, position, text, occurrence?]`
 - `["wrap_body", symbol, before, after, indentKeptBodyBy?]`
 - `["replace_return", symbol, replace, occurrence?]`
 - `["try_catch", symbol, catchBody?]`
 
-Keep `file` path exact. Do not repeat unchanged code.
+Keep file path exact. Do not repeat unchanged code. Review diff. Undo only with `confirm:true`.
 
-## Examples
-
-Replace tail return:
+Example:
 ```ts
 pi_blitz_replace_body_span({ file: "src/a.ts", symbol: "total", find: "return n;", replace: "return n + 1;", occurrence: "last" })
-```
-
-Multi edit:
-```ts
-pi_blitz_multi_body({ file: "src/a.ts", edits: [
-  { symbol: "a", op: "replace_body_span", find: "return x;", replace: "return x + 1;", occurrence: "last" },
-  { symbol: "b", op: "insert_body_span", anchor: "const y = x;", position: "after", text: "\n  audit(y);", occurrence: "only" },
-] })
-```
-
-Patch tuple:
-```ts
 pi_blitz_patch({ file: "src/a.ts", ops: [["replace_return", "label", 'return "unknown";', "last"]] })
 ```
-
-## Safety
-
-- Review changed diff after use when possible.
-- Use `pi_blitz_undo` only with `confirm: true`.
-- Do not use Blitz for binary files, unsupported grammars, or broad rewrites.
-- If Blitz loses measured tokens on simple both-correct row, choose core/apply_patch and report why.
