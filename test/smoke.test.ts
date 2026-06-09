@@ -68,6 +68,8 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(translateCompactOpParams({ f, ops: [["ek", "line"]] })).toEqual({ file: f, operation: "ensure_line", edit: { line: "line" } });
 		expect(translateCompactOpParams({ f, ops: [["dk", 3, 9, "remove"]] })).toEqual({ file: f, operation: "delete_range", edit: { start: 3, end: 9, expected: "remove" } });
 		expect(translateCompactOpParams({ f, ops: [["sk", "name", "value"]] })).toEqual({ file: f, operation: "set_key", edit: { key: "name", value: "value" } });
+		expect(translateCompactOpParams({ f, s: "rr\tformatStatus\tstatus.toLowerCase()\tonly" })).toEqual({ file: f, operation: "patch", edit: { ops: [["replace_return", "formatStatus", "status.toLowerCase()", "only"]] } });
+		expect(translateCompactOpParams({ f, s: "dk\t3\t9\tremove" })).toEqual({ file: f, operation: "delete_range", edit: { start: 3, end: 9, expected: "remove" } });
 	});
 
 	test("pi_blitz_op fails closed for malformed aliases", () => {

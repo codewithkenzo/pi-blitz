@@ -155,7 +155,8 @@ export const opTupleValueSchema = Type.Union([Type.String({ maxLength: SNIPPET_M
 
 export const opToolParamsSchema = Type.Object({
 	f: pathSchema,
-	ops: Type.Array(Type.Array(opTupleValueSchema, { minItems: 2, maxItems: 6 }), { minItems: 1, maxItems: BATCH_MAX_ITEMS, description: "Alias tuples: rr/rb/ib/wb/tc/ru/ia/bt/as/ek/dk/sk." }),
+	ops: Type.Optional(Type.Array(Type.Array(opTupleValueSchema, { minItems: 2, maxItems: 6 }), { minItems: 1, maxItems: BATCH_MAX_ITEMS, description: "Alias tuples: rr/rb/ib/wb/tc/ru/ia/bt/as/ek/dk/sk." })),
+	s: Type.Optional(Type.String({ minLength: 1, maxLength: APPLY_MAX_PAYLOAD, description: "Compact script; one tuple per line, tab-separated: rr<TAB>symbol<TAB>expr." })),
 	p: Type.Optional(Type.Boolean({ description: "Preview/dry-run." })),
 	d: Type.Optional(Type.Boolean({ description: "Include compact diff summary." })),
 });
@@ -936,7 +937,8 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 
 type CompactOpParams = {
 	f: string;
-	ops: Array<Array<string | number | boolean>>;
+	ops?: Array<Array<string | number | boolean>>;
+	s?: string;
 	p?: boolean;
 	d?: boolean;
 };
@@ -1015,13 +1017,30 @@ const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown
 	}
 };
 
+const parseCompactScript = (script: string): Array<Array<string | number | boolean>> => {
+	const rows = script
+		.split(/\r?\n|;/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	if (rows.length < 1) throw new InvalidParamsError({ reason: "s must include at least one tuple" });
+	return rows.map((line) =>
+		line.split("\t").map((part) => {
+			if (/^-?\d+$/.test(part)) return Number(part);
+			if (part === "true") return true;
+			if (part === "false") return false;
+			return part;
+		}),
+	);
+};
+
 export const translateCompactOpParams = (params: CompactOpParams): BlitzApplyParams => {
 	if (!isNonEmptyString(params.f)) throw new InvalidParamsError({ reason: "f must be file path" });
-	if (!Array.isArray(params.ops) || params.ops.length < 1) throw new InvalidParamsError({ reason: "ops must include at least one tuple" });
-	if (params.ops.length === 1) return compactTupleToApplyParams(params, params.ops[0] as Array<unknown>);
-	const edits = params.ops.map((tuple) => {
+	const ops = params.ops ?? (isNonEmptyString(params.s) ? parseCompactScript(params.s) : undefined);
+	if (!Array.isArray(ops) || ops.length < 1) throw new InvalidParamsError({ reason: "ops or s must include at least one tuple" });
+	if (ops.length === 1) return compactTupleToApplyParams({ ...params, ops }, ops[0] as Array<unknown>);
+	const edits = ops.map((tuple) => {
 		if (!Array.isArray(tuple)) throw new InvalidParamsError({ reason: "op tuple must be array" });
-		const translated = compactTupleToApplyParams({ f: params.f, ops: [tuple] }, tuple as Array<unknown>);
+		const translated = compactTupleToApplyParams({ f: params.f, ops: [tuple], ...(params.p !== undefined ? { p: params.p } : {}), ...(params.d !== undefined ? { d: params.d } : {}) }, tuple as Array<unknown>);
 		if (translated.operation !== "replace_body_span" && translated.operation !== "insert_body_span" && translated.operation !== "wrap_body") {
 			throw new InvalidParamsError({ reason: "multi-op pi_blitz_op only supports rb/ib/wb in one request" });
 		}
@@ -1047,7 +1066,7 @@ export const opToolDef = (binary: string, cwd: string) =>
 	({
 		name: "pi_blitz_op",
 		label: "blitz op",
-		description: "Compact alias edit. Args: {f,ops,p?,d?}. Aliases rr rb ib wb tc ru ia bt as ek dk sk.",
+		description: "Compact alias edit. Args: {f,ops|s,p?,d?}. s is tab-line script. Aliases rr rb ib wb tc ru ia bt as ek dk sk.",
 		parameters: opToolParamsSchema,
 		execute: async (_tcid: string, params: CompactOpParams): Promise<BlitzToolResult> => {
 			try {
