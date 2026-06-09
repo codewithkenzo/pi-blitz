@@ -135,6 +135,14 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(translateCompactOpParams({ f, s: "dk\t3\t9\tremove" })).toEqual({ file: f, operation: "delete_range", edit: { start: 3, end: 9, expected: "remove" } });
 	});
 
+	test("pi_blitz_op compact script decodes escaped string fields", () => {
+		const f = "src/app.ts";
+		expect(translateCompactOpParams({ f, s: "ia\t  console.log('start');\t\\n  console.time('load');" })).toEqual({ file: f, operation: "insert_after_anchor", edit: { anchor: "  console.log('start');", text: "\n  console.time('load');" } });
+		expect(translateCompactOpParams({ f, s: "ia\tafter\tanchor\tline\\nnext\\tindent\\rret\\\\slash" })).toEqual({ file: f, operation: "insert_after_anchor", edit: { anchor: "anchor", text: "line\nnext\tindent\rret\\slash" } });
+		expect(translateCompactOpParams({ f, s: "sk\tenabled\ttrue" })).toEqual({ file: f, operation: "set_key", edit: { key: "enabled", value: true } });
+		expect(translateCompactOpParams({ f, s: "dk\t3\t9\tremove" })).toEqual({ file: f, operation: "delete_range", edit: { start: 3, end: 9, expected: "remove" } });
+	});
+
 	test("pi_blitz_op fails closed for malformed aliases", () => {
 		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["dk", "3", "9", "remove"]] })).toThrow(InvalidParamsError);
 		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["dk", 3, 9]] })).toThrow(InvalidParamsError);

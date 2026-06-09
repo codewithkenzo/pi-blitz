@@ -248,7 +248,7 @@ type BlitzApplyPayload = {
 };
 
 // Soft-error classifier — matches the signal taxonomy in docs/architecture/blitz.md.
-const classifySoft = (stdout: string, stderr: string): BlitzSoftError | undefined => {
+const classifySoft = (_stdout: string, stderr: string): BlitzSoftError | undefined => {
 	if (/^No undo history for /m.test(stderr)) {
 		return new BlitzSoftError({ reason: "no-undo-history", stderr });
 	}
@@ -1042,9 +1042,43 @@ const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown
 	}
 };
 
+const decodeCompactScriptString = (value: string): string => {
+	let decoded = "";
+	for (let i = 0; i < value.length; i += 1) {
+		const char = value[i];
+		if (char !== "\\" || i === value.length - 1) {
+			decoded += char;
+			continue;
+		}
+
+		const next = value[i + 1];
+		switch (next) {
+			case "n":
+				decoded += "\n";
+				i += 1;
+				break;
+			case "t":
+				decoded += "\t";
+				i += 1;
+				break;
+			case "r":
+				decoded += "\r";
+				i += 1;
+				break;
+			case "\\":
+				decoded += "\\";
+				i += 1;
+				break;
+			default:
+				decoded += char;
+		}
+	}
+	return decoded;
+};
+
 const parseCompactScript = (script: string): Array<Array<string | number | boolean>> => {
 	const rows = script
-		.split(/\r?\n|;/)
+		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter(Boolean);
 	if (rows.length < 1) throw new InvalidParamsError({ reason: "s must include at least one tuple" });
@@ -1053,7 +1087,7 @@ const parseCompactScript = (script: string): Array<Array<string | number | boole
 			if (/^-?\d+$/.test(part)) return Number(part);
 			if (part === "true") return true;
 			if (part === "false") return false;
-			return part;
+			return decodeCompactScriptString(part);
 		}),
 	);
 };
