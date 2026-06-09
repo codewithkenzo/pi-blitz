@@ -18,7 +18,7 @@ Count savings only for correct Tokscale-matched rows where chosen route is cheap
 ## Profiles
 
 `PI_BLITZ_TOOL_PROFILE`:
-- `minimal`: patch only (`minimal-v0`)
+- `minimal`: compact `pi_blitz_op` only (`minimal-v0`)
 - `router`: `pi_blitz_route_edit`; executes Blitz only when supported and requested/proven cheaper, otherwise no-write decline to core/apply_patch
 - `semantic`: patch, try_catch, replace_return
 - `structural`: replace_body_span, multi_body, patch
