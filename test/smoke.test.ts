@@ -11,7 +11,13 @@ import {
 } from "../src/errors.js";
 import { makePathLocks } from "../src/mutex.js";
 import { runTool } from "../src/tool-runtime.js";
-import { applyToolParamsSchema, parseApplyResultPayload, patchToolParamsSchema } from "../src/tools.js";
+import {
+	applyToolParamsSchema,
+	opToolParamsSchema,
+	parseApplyResultPayload,
+	patchToolParamsSchema,
+	translateCompactOpParams,
+} from "../src/tools.js";
 
 const wait = (ms: number): Promise<void> =>
 	new Promise((r) => {
@@ -35,6 +41,29 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			ops: [["replace", "handleRequest", "return 1;", "return 2;", "only"]],
 		};
 		expect(Value.Check(patchToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_op schema accepts compact alias tuples", () => {
+		const valid = {
+			f: "src/app.ts",
+			ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]],
+			p: true,
+		};
+		expect(Value.Check(opToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_op translates aliases to apply payloads", () => {
+		expect(translateCompactOpParams({ f: "src/app.ts", ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]] })).toEqual({
+			file: "src/app.ts",
+			operation: "patch",
+			edit: { ops: [["replace_return", "formatStatus", "status.toUpperCase()", "only"]] },
+		});
+		expect(translateCompactOpParams({ f: "src/app.ts", ops: [["ru", "old", "new"]], p: true })).toEqual({
+			file: "src/app.ts",
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+			dry_run: true,
+		});
 	});
 
 	test("pi_blitz_apply schema rejects unknown operation", () => {

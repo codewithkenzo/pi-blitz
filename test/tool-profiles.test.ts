@@ -32,13 +32,14 @@ const createFakePi = () => {
 };
 
 describe("pi-blitz tool profiles", () => {
-	test("minimal profile is minimal-v0 and registers only compact existing patch surface", () => {
+	test("minimal profile is minimal-v0 and registers only compact op surface", () => {
 		expect(profileLabel("minimal")).toBe("minimal-v0");
-		expect(getProfiledToolNames("minimal")).toEqual(["pi_blitz_patch"]);
+		expect(getProfiledToolNames("minimal")).toEqual(["pi_blitz_op"]);
 	});
 
 	test("semantic profile omits structural/admin schemas", () => {
 		expect(getProfiledToolNames("semantic")).toEqual([
+			"pi_blitz_op",
 			"pi_blitz_patch",
 			"pi_blitz_try_catch",
 			"pi_blitz_replace_return",
@@ -49,6 +50,7 @@ describe("pi-blitz tool profiles", () => {
 
 	test("structural profile exposes compact structural tools without legacy/full/admin tools", () => {
 		expect(getProfiledToolNames("structural")).toEqual([
+			"pi_blitz_op",
 			"pi_blitz_replace_body_span",
 			"pi_blitz_multi_body",
 			"pi_blitz_patch",
@@ -70,7 +72,7 @@ describe("pi-blitz tool profiles", () => {
 	});
 
 	test("full profile preserves current 15-tool surface", () => {
-		expect(getProfiledToolNames("full")).toHaveLength(15);
+		expect(getProfiledToolNames("full")).toHaveLength(16);
 		expect(getProfiledToolNames("full")).toContain("pi_blitz_apply");
 		expect(getProfiledToolNames("full")).toContain("pi_blitz_doctor");
 	});
@@ -79,7 +81,7 @@ describe("pi-blitz tool profiles", () => {
 		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
 		expect(specs.profileLabel).toBe("minimal-v0");
 		expect(specs.tools).toHaveLength(1);
-		expect(specs.tools[0]!.name).toBe("pi_blitz_patch");
+		expect(specs.tools[0]!.name).toBe("pi_blitz_op");
 		expect("execute" in specs.tools[0]!).toBe(false);
 		expect(specs.tools[0]!.parameters).toBeTruthy();
 	});
@@ -95,7 +97,7 @@ describe("pi-blitz tool profiles", () => {
 
 		await piBlitz(pi);
 
-		expect(registeredToolNames).toEqual(["pi_blitz_patch"]);
+		expect(registeredToolNames).toEqual(["pi_blitz_op"]);
 		expect(resourceHandlers).toHaveLength(1);
 	});
 
@@ -105,7 +107,7 @@ describe("pi-blitz tool profiles", () => {
 
 		await piBlitz(pi);
 
-		expect(registeredToolNames).toHaveLength(15);
+		expect(registeredToolNames).toHaveLength(16);
 		expect(registeredToolNames).toContain("pi_blitz_apply");
 		expect(registeredToolNames).toContain("pi_blitz_doctor");
 	});

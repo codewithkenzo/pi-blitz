@@ -6,6 +6,7 @@ import {
 	editToolDef,
 	insertBodySpanToolDef,
 	multiBodyToolDef,
+	opToolDef,
 	patchToolDef,
 	piBlitzApplyToolDef,
 	readToolDef,
@@ -24,11 +25,12 @@ type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
 type ToolFactory = (binary: string, cwd: string) => ToolDef;
 
 const PROFILE_TOOLS = {
-	minimal: [patchToolDef],
-	semantic: [patchToolDef, tryCatchToolDef, replaceReturnToolDef],
-	structural: [replaceBodySpanToolDef, multiBodyToolDef, patchToolDef],
+	minimal: [opToolDef],
+	semantic: [opToolDef, patchToolDef, tryCatchToolDef, replaceReturnToolDef],
+	structural: [opToolDef, replaceBodySpanToolDef, multiBodyToolDef, patchToolDef],
 	admin: [readToolDef, renameToolDef, undoToolDef, doctorToolDef],
 	full: [
+		opToolDef,
 		readToolDef,
 		editToolDef,
 		batchToolDef,

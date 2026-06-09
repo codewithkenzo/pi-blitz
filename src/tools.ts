@@ -51,6 +51,14 @@ const applyOperationSchema = Type.Union(
 		Type.Literal("insert_after_symbol"),
 		Type.Literal("set_body"),
 		Type.Literal("patch"),
+		Type.Literal("replace_unique"),
+		Type.Literal("insert_after_anchor"),
+		Type.Literal("insert_before_anchor"),
+		Type.Literal("replace_between"),
+		Type.Literal("append_section"),
+		Type.Literal("ensure_line"),
+		Type.Literal("delete_range"),
+		Type.Literal("set_key"),
 	],
 	{
 		description:
@@ -141,6 +149,17 @@ export const patchToolParamsSchema = Type.Object({
 	include_diff: Type.Optional(Type.Boolean({ description: "Request compact diff summary in CLI output." })),
 });
 
+export const opTupleValueSchema = Type.Union([Type.String({ maxLength: SNIPPET_MAX }), Type.Number(), Type.Boolean()], {
+	description: "Compact op tuple item.",
+});
+
+export const opToolParamsSchema = Type.Object({
+	f: pathSchema,
+	ops: Type.Array(Type.Array(opTupleValueSchema, { minItems: 2, maxItems: 6 }), { minItems: 1, maxItems: BATCH_MAX_ITEMS, description: "Alias tuples: rr/rb/ib/wb/tc/ru/ia/bt/as/ek/dk/sk." }),
+	p: Type.Optional(Type.Boolean({ description: "Preview/dry-run." })),
+	d: Type.Optional(Type.Boolean({ description: "Include compact diff summary." })),
+});
+
 export const applyToolParamsSchema = Type.Object({
 	file: pathSchema,
 	operation: applyOperationSchema,
@@ -161,7 +180,15 @@ type BlitzApplyOperation =
 	| "multi_body"
 	| "insert_after_symbol"
 	| "set_body"
-	| "patch";
+	| "patch"
+	| "replace_unique"
+	| "insert_after_anchor"
+	| "insert_before_anchor"
+	| "replace_between"
+	| "append_section"
+	| "ensure_line"
+	| "delete_range"
+	| "set_key";
 
 const multiBodyEditItemSchema = Type.Object(
 	{
@@ -514,6 +541,49 @@ const assertApplyPayload = (params: BlitzApplyParams): InvalidParamsError | null
 			}
 			break;
 		}
+		case "replace_unique": {
+			if (!isNonEmptyString(params.edit.find) || !isNonEmptyString(params.edit.replace)) {
+				return new InvalidParamsError({ reason: "replace_unique requires edit.find and edit.replace strings" });
+			}
+			break;
+		}
+		case "insert_after_anchor":
+		case "insert_before_anchor": {
+			if (!isNonEmptyString(params.edit.anchor) || !isNonEmptyString(params.edit.text)) {
+				return new InvalidParamsError({ reason: `${params.operation} requires edit.anchor and edit.text strings` });
+			}
+			break;
+		}
+		case "replace_between": {
+			if (!isNonEmptyString(params.edit.start) || !isNonEmptyString(params.edit.end) || !isNonEmptyString(params.edit.replace)) {
+				return new InvalidParamsError({ reason: "replace_between requires edit.start, edit.end, and edit.replace strings" });
+			}
+			break;
+		}
+		case "append_section": {
+			if (!isNonEmptyString(params.edit.header) || !isNonEmptyString(params.edit.text)) {
+				return new InvalidParamsError({ reason: "append_section requires edit.header and edit.text strings" });
+			}
+			break;
+		}
+		case "ensure_line": {
+			if (!isNonEmptyString(params.edit.line)) {
+				return new InvalidParamsError({ reason: "ensure_line requires edit.line string" });
+			}
+			break;
+		}
+		case "delete_range": {
+			if (!isNonEmptyString(params.edit.start) || !isNonEmptyString(params.edit.end)) {
+				return new InvalidParamsError({ reason: "delete_range requires edit.start and edit.end strings" });
+			}
+			break;
+		}
+		case "set_key": {
+			if (!isNonEmptyString(params.edit.key) || params.edit.value === undefined) {
+				return new InvalidParamsError({ reason: "set_key requires edit.key string and edit.value" });
+			}
+			break;
+		}
 		case "multi_body": {
 			if (!Array.isArray(params.edit.edits) || params.edit.edits.length < 1) {
 				return new InvalidParamsError({ reason: "multi_body requires edit.edits array" });
@@ -735,13 +805,25 @@ const bindPath = (rawFile: string, cwd: string) => canonicalize(rawFile, cwd);
 
 // ---------------- Tools ----------------
 
+const isFileScopedApplyOperation = (operation: BlitzApplyOperation): boolean =>
+	operation === "multi_body" ||
+	operation === "patch" ||
+	operation === "replace_unique" ||
+	operation === "insert_after_anchor" ||
+	operation === "insert_before_anchor" ||
+	operation === "replace_between" ||
+	operation === "append_section" ||
+	operation === "ensure_line" ||
+	operation === "delete_range" ||
+	operation === "set_key";
+
 const executeApplyParams = (
 	binary: string,
 	cwd: string,
 	params: BlitzApplyParams,
 ): Promise<BlitzToolResult> => {
 	const eff = Effect.gen(function* () {
-		if (params.operation !== "multi_body" && params.operation !== "patch" && !isNonEmptyString(params.target?.symbol)) {
+		if (!isFileScopedApplyOperation(params.operation) && !isNonEmptyString(params.target?.symbol)) {
 			return yield* Effect.fail(
 				new InvalidParamsError({ reason: "target.symbol must be a non-empty string" }),
 			);
@@ -852,6 +934,75 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 	edits: Array<MultiBodyEditItem>;
 };
 
+type CompactOpParams = {
+	f: string;
+	ops: Array<Array<string | number | boolean>>;
+	p?: boolean;
+	d?: boolean;
+};
+
+
+const optionalOccurrence = (value: unknown, label: string): "only" | "first" | "last" | number | undefined => {
+	if (value === undefined) return undefined;
+	if (isOccurrence(value)) return value;
+	throw new InvalidParamsError({ reason: `${label} occurrence must be only|first|last|number` });
+};
+
+const needString = (value: unknown, label: string): string => {
+	if (isNonEmptyString(value)) return value;
+	throw new InvalidParamsError({ reason: `${label} must be non-empty string` });
+};
+
+const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown>): BlitzApplyParams => {
+	const alias = tuple[0];
+	if (!isNonEmptyString(alias)) throw new InvalidParamsError({ reason: "op alias must be non-empty string" });
+	const dry = params.p === true ? { dry_run: true } : {};
+	const diff = params.d === true ? { include_diff: true } : {};
+	switch (alias) {
+		case "rr":
+			return { file: params.f, operation: "patch", edit: { ops: [["replace_return", needString(tuple[1], "rr symbol"), needString(tuple[2], "rr expr"), ...(tuple[3] !== undefined ? [optionalOccurrence(tuple[3], "rr")] : [])]] }, ...dry, ...diff };
+		case "rb":
+			return toCommonApplyParams({ file: params.f, symbol: needString(tuple[1], "rb symbol"), ...dry, ...diff }, "replace_body_span", { find: needString(tuple[2], "rb find"), replace: needString(tuple[3], "rb replace"), ...(tuple[4] !== undefined ? { occurrence: optionalOccurrence(tuple[4], "rb") } : {}) });
+		case "ib":
+			return toCommonApplyParams({ file: params.f, symbol: needString(tuple[1], "ib symbol"), ...dry, ...diff }, "insert_body_span", { anchor: needString(tuple[2], "ib anchor"), position: tuple[3] === "before" ? "before" : "after", text: needString(tuple[4], "ib text"), ...(tuple[5] !== undefined ? { occurrence: optionalOccurrence(tuple[5], "ib") } : {}) });
+		case "wb":
+			return toCommonApplyParams({ file: params.f, symbol: needString(tuple[1], "wb symbol"), ...dry, ...diff }, "wrap_body", { before: needString(tuple[2], "wb before"), keep: "body", after: needString(tuple[3], "wb after"), ...(typeof tuple[4] === "number" ? { indentKeptBodyBy: tuple[4] } : {}) });
+		case "tc":
+			return { file: params.f, operation: "patch", edit: { ops: [["try_catch", needString(tuple[1], "tc symbol"), needString(tuple[2], "tc catchBody"), ...(typeof tuple[3] === "number" ? [tuple[3]] : [])]] }, ...dry, ...diff };
+		case "ru":
+			return { file: params.f, operation: "replace_unique", edit: { find: needString(tuple[1], "ru find"), replace: needString(tuple[2], "ru replace") }, ...dry, ...diff };
+		case "ia":
+			return { file: params.f, operation: tuple[1] === "before" ? "insert_before_anchor" : "insert_after_anchor", edit: { anchor: needString(tuple[2], "ia anchor"), text: needString(tuple[3], "ia text") }, ...dry, ...diff };
+		case "bt":
+			return { file: params.f, operation: "replace_between", edit: { start: needString(tuple[1], "bt start"), end: needString(tuple[2], "bt end"), replace: needString(tuple[3], "bt replace") }, ...dry, ...diff };
+		case "as":
+			return { file: params.f, operation: "append_section", edit: { header: needString(tuple[1], "as header"), text: needString(tuple[2], "as text") }, ...dry, ...diff };
+		case "ek":
+			return { file: params.f, operation: "ensure_line", edit: { line: needString(tuple[1], "ek line") }, ...dry, ...diff };
+		case "dk":
+			return { file: params.f, operation: "delete_range", edit: { start: needString(tuple[1], "dk start"), end: needString(tuple[2], "dk end") }, ...dry, ...diff };
+		case "sk":
+			return { file: params.f, operation: "set_key", edit: { key: needString(tuple[1], "sk key"), value: tuple[2] }, ...dry, ...diff };
+		default:
+			throw new InvalidParamsError({ reason: `unsupported op alias: ${alias}` });
+	}
+};
+
+export const translateCompactOpParams = (params: CompactOpParams): BlitzApplyParams => {
+	if (!isNonEmptyString(params.f)) throw new InvalidParamsError({ reason: "f must be file path" });
+	if (!Array.isArray(params.ops) || params.ops.length < 1) throw new InvalidParamsError({ reason: "ops must include at least one tuple" });
+	if (params.ops.length === 1) return compactTupleToApplyParams(params, params.ops[0] as Array<unknown>);
+	const edits = params.ops.map((tuple) => {
+		if (!Array.isArray(tuple)) throw new InvalidParamsError({ reason: "op tuple must be array" });
+		const translated = compactTupleToApplyParams({ f: params.f, ops: [tuple] }, tuple as Array<unknown>);
+		if (translated.operation !== "replace_body_span" && translated.operation !== "insert_body_span" && translated.operation !== "wrap_body") {
+			throw new InvalidParamsError({ reason: "multi-op pi_blitz_op only supports rb/ib/wb in one request" });
+		}
+		return { symbol: translated.target?.symbol ?? "", op: translated.operation, ...translated.edit };
+	});
+	return { file: params.f, operation: "multi_body", edit: { edits }, ...(params.p === true ? { dry_run: true } : {}), ...(params.d === true ? { include_diff: true } : {}) };
+};
+
 const toCommonApplyParams = (
 	params: NarrowCommonParams,
 	operation: BlitzApplyOperation,
@@ -864,6 +1015,24 @@ const toCommonApplyParams = (
 	...(params.dry_run !== undefined ? { dry_run: params.dry_run } : {}),
 	...(params.include_diff !== undefined ? { include_diff: params.include_diff } : {}),
 });
+
+export const opToolDef = (binary: string, cwd: string) =>
+	({
+		name: "pi_blitz_op",
+		label: "blitz op",
+		description: "Compact alias edit. Args: {f,ops,p?,d?}. Aliases rr rb ib wb tc ru ia bt as ek dk sk.",
+		parameters: opToolParamsSchema,
+		execute: async (_tcid: string, params: CompactOpParams): Promise<BlitzToolResult> => {
+			try {
+				return executeApplyParams(binary, cwd, translateCompactOpParams(params));
+			} catch (err) {
+				if (err instanceof InvalidParamsError) {
+					return runTool(Effect.fail(err), (v) => v as BlitzToolResult);
+				}
+				throw err;
+			}
+		},
+	}) as const;
 
 export const replaceBodySpanToolDef = (binary: string, cwd: string) =>
 	({
