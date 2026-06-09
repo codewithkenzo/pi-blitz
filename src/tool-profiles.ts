@@ -26,14 +26,7 @@ type ToolFactory = (binary: string, cwd: string) => ToolDef;
 const PROFILE_TOOLS = {
 	minimal: [patchToolDef],
 	semantic: [patchToolDef, tryCatchToolDef, replaceReturnToolDef],
-	structural: [
-		replaceBodySpanToolDef,
-		insertBodySpanToolDef,
-		wrapBodyToolDef,
-		composeBodyToolDef,
-		multiBodyToolDef,
-		patchToolDef,
-	],
+	structural: [replaceBodySpanToolDef, multiBodyToolDef, patchToolDef],
 	admin: [readToolDef, renameToolDef, undoToolDef, doctorToolDef],
 	full: [
 		readToolDef,

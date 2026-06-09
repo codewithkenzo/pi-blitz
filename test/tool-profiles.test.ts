@@ -47,17 +47,15 @@ describe("pi-blitz tool profiles", () => {
 		expect(getProfiledToolNames("semantic")).not.toContain("pi_blitz_apply");
 	});
 
-	test("structural profile exposes narrow edit tools without legacy/full/admin tools", () => {
+	test("structural profile exposes compact structural tools without legacy/full/admin tools", () => {
 		expect(getProfiledToolNames("structural")).toEqual([
 			"pi_blitz_replace_body_span",
-			"pi_blitz_insert_body_span",
-			"pi_blitz_wrap_body",
-			"pi_blitz_compose_body",
 			"pi_blitz_multi_body",
 			"pi_blitz_patch",
 		]);
 		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_doctor");
 		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_edit");
+		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_wrap_body");
 	});
 
 	test("admin profile exposes admin helpers only", () => {
