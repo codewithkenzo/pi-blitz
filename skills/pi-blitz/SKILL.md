@@ -38,7 +38,7 @@ Patch ops:
 - `["replace_return", symbol, replace, occurrence?]`
 - `["try_catch", symbol, catchBody?]`
 
-Keep path exact. Never repeat unchanged code. Review diff. Undo needs `confirm:true`.
+Keep path exact. Never repeat unchanged code. Undo needs `confirm:true`.
 
 ```ts
 pi_blitz_replace_body_span({ file:"src/a.ts", symbol:"total", find:"return n;", replace:"return n+1;", occurrence:"last" })
