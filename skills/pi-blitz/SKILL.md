@@ -5,7 +5,7 @@ description: Tiny Blitz AST edit routing. Use when symbol/body edit likely beats
 
 # pi-blitz
 
-Not core replacement by default. Choose cheapest safe route.
+Not core replacement by default. Choose cheapest route.
 
 Core/apply_patch if edit is tiny text, whole-file, unsupported, unclear symbol, or exact old/new is shorter than Blitz args.
 
