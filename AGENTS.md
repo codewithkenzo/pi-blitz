@@ -25,7 +25,7 @@ This repo registers Pi-facing Blitz tools, ships resident skill text, selects mo
 
 - Resident tool schema and resident skill text are part of token cost.
 - Do not claim token savings without real Pi artifacts, correctness status, tokenizer metadata, and Tokscale/provider accounting from the Blitz benchmark harness.
-- `PI_BLITZ_TOOL_PROFILE=minimal|semantic|structural|admin|full` must actually control which schemas register; unused profile schemas must not be visible.
+- `PI_BLITZ_TOOL_PROFILE=minimal|router|semantic|structural|admin|full` must actually control which schemas register; unused profile schemas must not be visible.
 - Keep default model-visible output compact: operation/route, file, changed range/status, validation, and concise errors.
 - Prefer stable, compact surfaces and lazy/discoverable docs over adding many always-visible tools.
 

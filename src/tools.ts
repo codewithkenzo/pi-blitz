@@ -161,6 +161,16 @@ export const opToolParamsSchema = Type.Object({
 	d: Type.Optional(Type.Boolean({ description: "Include compact diff summary." })),
 });
 
+export const routeEditToolParamsSchema = Type.Object({
+	f: pathSchema,
+	ops: Type.Optional(Type.Array(Type.Array(opTupleValueSchema, { minItems: 2, maxItems: 6 }), { minItems: 1, maxItems: BATCH_MAX_ITEMS, description: "Blitz alias tuples. Missing ops/s declines to core/apply_patch." })),
+	s: Type.Optional(Type.String({ minLength: 1, maxLength: APPLY_MAX_PAYLOAD, description: "Compact Blitz script, tab-separated." })),
+	r: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("blitz"), Type.Literal("core"), Type.Literal("apply_patch")], { description: "Route preference. auto fails closed without fallbackContextTokensExpected proof." })),
+	fallbackContextTokensExpected: Type.Optional(Type.Number({ description: "Expected core/apply_patch context tokens for same edit." })),
+	p: Type.Optional(Type.Boolean({ description: "Preview/dry-run when Blitz selected." })),
+	d: Type.Optional(Type.Boolean({ description: "Include compact diff summary when Blitz selected." })),
+});
+
 export const applyToolParamsSchema = Type.Object({
 	file: pathSchema,
 	operation: applyOperationSchema,
@@ -943,6 +953,21 @@ type CompactOpParams = {
 	d?: boolean;
 };
 
+type RouteEditParams = CompactOpParams & {
+	r?: "auto" | "blitz" | "core" | "apply_patch";
+	fallbackContextTokensExpected?: number;
+};
+
+type RouteDecision = {
+	selected: "blitz" | "core" | "apply_patch";
+	selectedBecause: string;
+	contextSavingsPct: number;
+	schemaTokensExpected: number;
+	argTokensExpected: number;
+	outputTokensExpected: number;
+	fallbackContextTokensExpected: number;
+};
+
 
 const optionalOccurrence = (value: unknown, label: string): "only" | "first" | "last" | number | undefined => {
 	if (value === undefined) return undefined;
@@ -1049,6 +1074,61 @@ export const translateCompactOpParams = (params: CompactOpParams): BlitzApplyPar
 	return { file: params.f, operation: "multi_body", edit: { edits }, ...(params.p === true ? { dry_run: true } : {}), ...(params.d === true ? { include_diff: true } : {}) };
 };
 
+const estimateJsonTokens = (value: unknown): number => Math.ceil(JSON.stringify(value).length / 4);
+
+const buildRouteDecision = (params: RouteEditParams): RouteDecision => {
+	const route = params.r ?? "auto";
+	const hasBlitzPayload = Array.isArray(params.ops) || isNonEmptyString(params.s);
+	const schemaTokensExpected = 220;
+	const argTokensExpected = hasBlitzPayload ? estimateJsonTokens({ f: params.f, ops: params.ops, s: params.s, p: params.p, d: params.d }) : 0;
+	const outputTokensExpected = 80;
+	const blitzContextExpected = schemaTokensExpected + argTokensExpected + outputTokensExpected;
+	const fallbackContextTokensExpected = params.fallbackContextTokensExpected ?? 0;
+	const contextSavingsPct = fallbackContextTokensExpected > 0
+		? Math.round(((fallbackContextTokensExpected - blitzContextExpected) / fallbackContextTokensExpected) * 10_000) / 100
+		: 0;
+	const tokenFields = {
+		contextSavingsPct,
+		schemaTokensExpected,
+		argTokensExpected,
+		outputTokensExpected,
+		fallbackContextTokensExpected,
+	};
+
+	if (route === "core" || route === "apply_patch") {
+		return { selected: route, selectedBecause: `requested ${route}; pi-blitz does not call core/apply_patch internally`, ...tokenFields };
+	}
+	if (!hasBlitzPayload) {
+		return { selected: "apply_patch", selectedBecause: "no Blitz ops/s payload; use core/apply_patch with exact patch or oldText/newText", ...tokenFields };
+	}
+	if (route === "blitz") {
+		return { selected: "blitz", selectedBecause: "requested blitz and compact payload is present; no token-savings claim without Tokscale row", ...tokenFields };
+	}
+	if (fallbackContextTokensExpected <= 0) {
+		return { selected: "apply_patch", selectedBecause: "auto route lacks fallbackContextTokensExpected; fail closed to core/apply_patch", ...tokenFields };
+	}
+	if (contextSavingsPct <= 0) {
+		return { selected: "apply_patch", selectedBecause: "estimated Blitz route is not token-cheaper than fallback; use core/apply_patch", ...tokenFields };
+	}
+	return { selected: "blitz", selectedBecause: "estimated Blitz route is token-cheaper than fallback and compact payload is present", ...tokenFields };
+};
+
+const routeDeclineResult = (decision: RouteDecision, file: string): BlitzToolResult => ({
+	content: [{ type: "text", text: `pi-blitz route: ${decision.selected}; ${decision.selectedBecause}` }],
+	details: {
+		file,
+		selected: decision.selected,
+		profile: "router",
+		tool: "pi_blitz_route_edit",
+		contextSavingsPct: decision.contextSavingsPct,
+		schemaTokensExpected: decision.schemaTokensExpected,
+		argTokensExpected: decision.argTokensExpected,
+		outputTokensExpected: decision.outputTokensExpected,
+		fallbackContextTokensExpected: decision.fallbackContextTokensExpected,
+		selectedBecause: decision.selectedBecause,
+	},
+});
+
 const toCommonApplyParams = (
 	params: NarrowCommonParams,
 	operation: BlitzApplyOperation,
@@ -1077,6 +1157,46 @@ export const opToolDef = (binary: string, cwd: string) =>
 				}
 				throw err;
 			}
+		},
+	}) as const;
+
+export const routeEditToolDef = (binary: string, cwd: string) =>
+	({
+		name: "pi_blitz_route_edit",
+		label: "blitz route edit",
+		description: "Token-first edit router. Executes Blitz only with supported ops/s and proof/request; otherwise no-write decline to core/apply_patch.",
+		parameters: routeEditToolParamsSchema,
+		execute: async (_tcid: string, params: RouteEditParams): Promise<BlitzToolResult> => {
+			let applyParams: BlitzApplyParams | undefined;
+			try {
+				if (Array.isArray(params.ops) || isNonEmptyString(params.s)) applyParams = translateCompactOpParams(params);
+			} catch (err) {
+				if (err instanceof InvalidParamsError) {
+					const decision = buildRouteDecision({ ...params, r: "apply_patch" });
+					return routeDeclineResult({ ...decision, selectedBecause: `${err.reason}; use core/apply_patch or fix Blitz tuple` }, params.f);
+				}
+				throw err;
+			}
+
+			const decision = buildRouteDecision(params);
+			if (decision.selected !== "blitz" || applyParams === undefined) return routeDeclineResult(decision, params.f);
+
+			const result = await executeApplyParams(binary, cwd, applyParams);
+			return {
+				...result,
+				details: {
+					...result.details,
+					selected: "blitz",
+					profile: "router",
+					tool: "pi_blitz_op",
+					contextSavingsPct: decision.contextSavingsPct,
+					schemaTokensExpected: decision.schemaTokensExpected,
+					argTokensExpected: decision.argTokensExpected,
+					outputTokensExpected: decision.outputTokensExpected,
+					fallbackContextTokensExpected: decision.fallbackContextTokensExpected,
+					selectedBecause: decision.selectedBecause,
+				},
+			};
 		},
 	}) as const;
 

@@ -13,12 +13,13 @@ import {
 	renameToolDef,
 	replaceBodySpanToolDef,
 	replaceReturnToolDef,
+	routeEditToolDef,
 	tryCatchToolDef,
 	undoToolDef,
 	wrapBodyToolDef,
 } from "./tools.js";
 
-export type PiBlitzToolProfile = "minimal" | "semantic" | "structural" | "admin" | "full";
+export type PiBlitzToolProfile = "minimal" | "router" | "semantic" | "structural" | "admin" | "full";
 export type PiBlitzProfileLabel = PiBlitzToolProfile | "minimal-v0";
 
 type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
@@ -26,10 +27,12 @@ type ToolFactory = (binary: string, cwd: string) => ToolDef;
 
 const PROFILE_TOOLS = {
 	minimal: [opToolDef],
+	router: [routeEditToolDef],
 	semantic: [opToolDef, patchToolDef, tryCatchToolDef, replaceReturnToolDef],
 	structural: [opToolDef, replaceBodySpanToolDef, multiBodyToolDef, patchToolDef],
 	admin: [readToolDef, renameToolDef, undoToolDef, doctorToolDef],
 	full: [
+		routeEditToolDef,
 		opToolDef,
 		readToolDef,
 		editToolDef,

@@ -48,6 +48,12 @@ describe("pi-blitz tool profiles", () => {
 		expect(getProfiledToolNames("semantic")).not.toContain("pi_blitz_apply");
 	});
 
+	test("router profile exposes only runtime route facade", () => {
+		expect(getProfiledToolNames("router")).toEqual(["pi_blitz_route_edit"]);
+		expect(getProfiledToolNames("router")).not.toContain("pi_blitz_op");
+		expect(getProfiledToolNames("router")).not.toContain("pi_blitz_apply");
+	});
+
 	test("structural profile exposes compact structural tools without legacy/full/admin tools", () => {
 		expect(getProfiledToolNames("structural")).toEqual([
 			"pi_blitz_op",
@@ -71,8 +77,9 @@ describe("pi-blitz tool profiles", () => {
 		expect(getProfiledToolNames("admin")).not.toContain("pi_blitz_apply");
 	});
 
-	test("full profile preserves current 15-tool surface", () => {
-		expect(getProfiledToolNames("full")).toHaveLength(16);
+	test("full profile preserves current all-tool surface", () => {
+		expect(getProfiledToolNames("full")).toHaveLength(17);
+		expect(getProfiledToolNames("full")).toContain("pi_blitz_route_edit");
 		expect(getProfiledToolNames("full")).toContain("pi_blitz_apply");
 		expect(getProfiledToolNames("full")).toContain("pi_blitz_doctor");
 	});
@@ -107,7 +114,8 @@ describe("pi-blitz tool profiles", () => {
 
 		await piBlitz(pi);
 
-		expect(registeredToolNames).toHaveLength(16);
+		expect(registeredToolNames).toHaveLength(17);
+		expect(registeredToolNames).toContain("pi_blitz_route_edit");
 		expect(registeredToolNames).toContain("pi_blitz_apply");
 		expect(registeredToolNames).toContain("pi_blitz_doctor");
 	});

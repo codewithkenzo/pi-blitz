@@ -13,10 +13,13 @@ Blitz if target is symbol/body, large body stays unchanged, multi-op structural 
 
 Count savings only for correct Tokscale-matched rows where chosen route is cheaper. Failed rows are caveats only.
 
+`pi_blitz_route_edit` is runtime boundary, not core wrapper. It never calls core/apply_patch; core/apply_patch selections are no-write route declines with token/context reason.
+
 ## Profiles
 
 `PI_BLITZ_TOOL_PROFILE`:
 - `minimal`: patch only (`minimal-v0`)
+- `router`: `pi_blitz_route_edit`; executes Blitz only when supported and requested/proven cheaper, otherwise no-write decline to core/apply_patch
 - `semantic`: patch, try_catch, replace_return
 - `structural`: replace_body_span, multi_body, patch
 - `admin`: read, rename, undo, doctor
@@ -25,6 +28,7 @@ Count savings only for correct Tokscale-matched rows where chosen route is cheap
 ## Tools
 
 Use narrowest visible tool:
+- route boundary → `pi_blitz_route_edit`; details expose `contextSavingsPct`, `schemaTokensExpected`, `argTokensExpected`, `outputTokensExpected`, `fallbackContextTokensExpected`, `selectedBecause`
 - span replace → `pi_blitz_replace_body_span`
 - many body edits → `pi_blitz_multi_body`
 - mixed tuple route → `pi_blitz_patch`

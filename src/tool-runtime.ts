@@ -38,6 +38,15 @@ export interface PiBlitzDetails {
 	validation?: unknown;
 	metrics?: unknown;
 	operation?: string;
+	selected?: "blitz" | "core" | "apply_patch";
+	profile?: string;
+	tool?: string;
+	contextSavingsPct?: number;
+	schemaTokensExpected?: number;
+	argTokensExpected?: number;
+	outputTokensExpected?: number;
+	fallbackContextTokensExpected?: number;
+	selectedBecause?: string;
 }
 
 export interface BlitzToolResult {

@@ -16,6 +16,8 @@ import {
 	opToolParamsSchema,
 	parseApplyResultPayload,
 	patchToolParamsSchema,
+	routeEditToolDef,
+	routeEditToolParamsSchema,
 	translateCompactOpParams,
 } from "../src/tools.js";
 
@@ -50,6 +52,43 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			p: true,
 		};
 		expect(Value.Check(opToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_route_edit schema accepts token-first routing fields", () => {
+		const valid = {
+			f: "src/app.ts",
+			r: "auto" as const,
+			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
+			fallbackContextTokensExpected: 500,
+		};
+		expect(Value.Check(routeEditToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_route_edit declines without fallback proof in auto mode", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/app.ts",
+			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
+		});
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.contextSavingsPct).toBe(0);
+		expect(result.details?.schemaTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.argTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.outputTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.fallbackContextTokensExpected).toBe(0);
+		expect(result.details?.selectedBecause).toContain("fail closed");
+	});
+
+	test("pi_blitz_route_edit declines requested core without mutating", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/app.ts",
+			r: "core",
+			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
+			fallbackContextTokensExpected: 1000,
+		});
+		expect(result.details?.selected).toBe("core");
+		expect(result.details?.selectedBecause).toContain("does not call core/apply_patch internally");
 	});
 
 	test("pi_blitz_op translates all aliases to apply payloads", () => {
