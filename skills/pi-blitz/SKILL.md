@@ -13,7 +13,7 @@ Blitz if target is symbol/body, large body stays unchanged, multi-op structural 
 
 Count savings only for correct Tokscale-matched rows where chosen route is cheaper. Failed rows are caveats only.
 
-`pi_blitz_route_edit` is runtime boundary, not core wrapper. It never calls core/apply_patch; core/apply_patch selections are no-write route declines with token/context reason.
+`pi_blitz_route_edit` is runtime boundary, not core wrapper. It never calls core/apply_patch; core/apply_patch selections return terminal no-write declines (`status=declined`, `terminal=true`, `actionRequired=use_external_core_or_apply_patch`).
 
 ## Profiles
 

@@ -71,6 +71,11 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
 		});
 		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.actionRequired).toBe("use_external_core_or_apply_patch");
+		expect(result.content[0]?.text).toContain("no-write terminal");
 		expect(result.details?.contextSavingsPct).toBe(0);
 		expect(result.details?.schemaTokensExpected).toBeGreaterThan(0);
 		expect(result.details?.argTokensExpected).toBeGreaterThan(0);
@@ -88,7 +93,26 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			fallbackContextTokensExpected: 1000,
 		});
 		expect(result.details?.selected).toBe("core");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
 		expect(result.details?.selectedBecause).toContain("does not call core/apply_patch internally");
+	});
+
+	test("pi_blitz_route_edit unsupported alias returns terminal apply_patch decline", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/config.ts",
+			r: "apply_patch",
+			s: "apply_patch\tAPI_URL\thttps://example.com",
+			fallbackContextTokensExpected: 200,
+		});
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.content[0]?.text).toContain("next=use external core/apply_patch");
+		expect(result.details?.selectedBecause).toContain("unsupported op alias: apply_patch");
 	});
 
 	test("pi_blitz_op translates all aliases to apply payloads", () => {

@@ -8,6 +8,9 @@ export interface PiBlitzDetails {
 	partial?: boolean;
 	degraded?: boolean;
 	status?: string;
+	terminal?: boolean;
+	noWrite?: boolean;
+	actionRequired?: string;
 	parseFallback?: boolean;
 	lane?: string;
 	mode?: string;

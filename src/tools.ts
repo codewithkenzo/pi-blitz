@@ -1114,9 +1114,18 @@ const buildRouteDecision = (params: RouteEditParams): RouteDecision => {
 };
 
 const routeDeclineResult = (decision: RouteDecision, file: string): BlitzToolResult => ({
-	content: [{ type: "text", text: `pi-blitz route: ${decision.selected}; ${decision.selectedBecause}` }],
+	content: [
+		{
+			type: "text",
+			text: `pi-blitz route declined: no-write terminal. selected=${decision.selected}. next=use external core/apply_patch. reason=${decision.selectedBecause}`,
+		},
+	],
 	details: {
 		file,
+		status: "declined",
+		terminal: true,
+		noWrite: true,
+		actionRequired: "use_external_core_or_apply_patch",
 		selected: decision.selected,
 		profile: "router",
 		tool: "pi_blitz_route_edit",
