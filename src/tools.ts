@@ -561,8 +561,8 @@ const assertApplyPayload = (params: BlitzApplyParams): InvalidParamsError | null
 			break;
 		}
 		case "append_section": {
-			if (!isNonEmptyString(params.edit.header) || !isNonEmptyString(params.edit.text)) {
-				return new InvalidParamsError({ reason: "append_section requires edit.header and edit.text strings" });
+			if (!isNonEmptyString(params.edit.heading) || !isNonEmptyString(params.edit.text)) {
+				return new InvalidParamsError({ reason: "append_section requires edit.heading and edit.text strings" });
 			}
 			break;
 		}
@@ -573,8 +573,8 @@ const assertApplyPayload = (params: BlitzApplyParams): InvalidParamsError | null
 			break;
 		}
 		case "delete_range": {
-			if (!isNonEmptyString(params.edit.start) || !isNonEmptyString(params.edit.end)) {
-				return new InvalidParamsError({ reason: "delete_range requires edit.start and edit.end strings" });
+			if (typeof params.edit.start !== "number" || typeof params.edit.end !== "number" || !isNonEmptyString(params.edit.expected)) {
+				return new InvalidParamsError({ reason: "delete_range requires numeric edit.start/edit.end and edit.expected string" });
 			}
 			break;
 		}
@@ -953,6 +953,33 @@ const needString = (value: unknown, label: string): string => {
 	throw new InvalidParamsError({ reason: `${label} must be non-empty string` });
 };
 
+const needNumber = (value: unknown, label: string): number => {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+	throw new InvalidParamsError({ reason: `${label} must be non-negative integer` });
+};
+
+const translateReplaceReturnTuple = (params: CompactOpParams, tuple: Array<unknown>, dry: Partial<BlitzApplyParams>, diff: Partial<BlitzApplyParams>): BlitzApplyParams => {
+	const symbol = needString(tuple[1], "rr symbol");
+	const third = tuple[2];
+	const fourth = tuple[3];
+	const exprFirst = isNonEmptyString(third) && !isOccurrence(third) && (fourth === undefined || isOccurrence(fourth));
+	const occurrenceFirst = isOccurrence(third) && isNonEmptyString(fourth);
+	if (!exprFirst && !occurrenceFirst) {
+		throw new InvalidParamsError({ reason: "rr requires [rr,symbol,expr,occurrence?] or [rr,symbol,occurrence,expr]" });
+	}
+	const expr = occurrenceFirst ? fourth : third;
+	const occurrence = occurrenceFirst ? third : fourth;
+	return { file: params.f, operation: "patch", edit: { ops: [["replace_return", symbol, expr, ...(occurrence !== undefined ? [optionalOccurrence(occurrence, "rr")] : [])]] }, ...dry, ...diff };
+};
+
+const translateInsertAnchorTuple = (params: CompactOpParams, tuple: Array<unknown>, dry: Partial<BlitzApplyParams>, diff: Partial<BlitzApplyParams>): BlitzApplyParams => {
+	const positionFirst = tuple[1] === "before" || tuple[1] === "after";
+	const position = positionFirst ? tuple[1] : tuple[3] === "before" ? "before" : "after";
+	const anchor = positionFirst ? needString(tuple[2], "ia anchor") : needString(tuple[1], "ia anchor");
+	const text = positionFirst ? needString(tuple[3], "ia text") : needString(tuple[2], "ia text");
+	return { file: params.f, operation: position === "before" ? "insert_before_anchor" : "insert_after_anchor", edit: { anchor, text }, ...dry, ...diff };
+};
+
 const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown>): BlitzApplyParams => {
 	const alias = tuple[0];
 	if (!isNonEmptyString(alias)) throw new InvalidParamsError({ reason: "op alias must be non-empty string" });
@@ -960,7 +987,7 @@ const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown
 	const diff = params.d === true ? { include_diff: true } : {};
 	switch (alias) {
 		case "rr":
-			return { file: params.f, operation: "patch", edit: { ops: [["replace_return", needString(tuple[1], "rr symbol"), needString(tuple[2], "rr expr"), ...(tuple[3] !== undefined ? [optionalOccurrence(tuple[3], "rr")] : [])]] }, ...dry, ...diff };
+			return translateReplaceReturnTuple(params, tuple, dry, diff);
 		case "rb":
 			return toCommonApplyParams({ file: params.f, symbol: needString(tuple[1], "rb symbol"), ...dry, ...diff }, "replace_body_span", { find: needString(tuple[2], "rb find"), replace: needString(tuple[3], "rb replace"), ...(tuple[4] !== undefined ? { occurrence: optionalOccurrence(tuple[4], "rb") } : {}) });
 		case "ib":
@@ -972,15 +999,15 @@ const compactTupleToApplyParams = (params: CompactOpParams, tuple: Array<unknown
 		case "ru":
 			return { file: params.f, operation: "replace_unique", edit: { find: needString(tuple[1], "ru find"), replace: needString(tuple[2], "ru replace") }, ...dry, ...diff };
 		case "ia":
-			return { file: params.f, operation: tuple[1] === "before" ? "insert_before_anchor" : "insert_after_anchor", edit: { anchor: needString(tuple[2], "ia anchor"), text: needString(tuple[3], "ia text") }, ...dry, ...diff };
+			return translateInsertAnchorTuple(params, tuple, dry, diff);
 		case "bt":
 			return { file: params.f, operation: "replace_between", edit: { start: needString(tuple[1], "bt start"), end: needString(tuple[2], "bt end"), replace: needString(tuple[3], "bt replace") }, ...dry, ...diff };
 		case "as":
-			return { file: params.f, operation: "append_section", edit: { header: needString(tuple[1], "as header"), text: needString(tuple[2], "as text") }, ...dry, ...diff };
+			return { file: params.f, operation: "append_section", edit: { heading: needString(tuple[1], "as heading"), text: needString(tuple[2], "as text") }, ...dry, ...diff };
 		case "ek":
 			return { file: params.f, operation: "ensure_line", edit: { line: needString(tuple[1], "ek line") }, ...dry, ...diff };
 		case "dk":
-			return { file: params.f, operation: "delete_range", edit: { start: needString(tuple[1], "dk start"), end: needString(tuple[2], "dk end") }, ...dry, ...diff };
+			return { file: params.f, operation: "delete_range", edit: { start: needNumber(tuple[1], "dk start"), end: needNumber(tuple[2], "dk end"), expected: needString(tuple[3], "dk expected") }, ...dry, ...diff };
 		case "sk":
 			return { file: params.f, operation: "set_key", edit: { key: needString(tuple[1], "sk key"), value: tuple[2] }, ...dry, ...diff };
 		default:

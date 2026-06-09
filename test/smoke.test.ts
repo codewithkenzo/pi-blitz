@@ -52,18 +52,29 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(Value.Check(opToolParamsSchema, valid)).toBe(true);
 	});
 
-	test("pi_blitz_op translates aliases to apply payloads", () => {
-		expect(translateCompactOpParams({ f: "src/app.ts", ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]] })).toEqual({
-			file: "src/app.ts",
-			operation: "patch",
-			edit: { ops: [["replace_return", "formatStatus", "status.toUpperCase()", "only"]] },
-		});
-		expect(translateCompactOpParams({ f: "src/app.ts", ops: [["ru", "old", "new"]], p: true })).toEqual({
-			file: "src/app.ts",
-			operation: "replace_unique",
-			edit: { find: "old", replace: "new" },
-			dry_run: true,
-		});
+	test("pi_blitz_op translates all aliases to apply payloads", () => {
+		const f = "src/app.ts";
+		expect(translateCompactOpParams({ f, ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]] })).toEqual({ file: f, operation: "patch", edit: { ops: [["replace_return", "formatStatus", "status.toUpperCase()", "only"]] } });
+		expect(translateCompactOpParams({ f, ops: [["rr", "formatStatus", "last", "\"unknown\""]] })).toEqual({ file: f, operation: "patch", edit: { ops: [["replace_return", "formatStatus", "\"unknown\"", "last"]] } });
+		expect(translateCompactOpParams({ f, ops: [["rb", "fn", "old", "new", "last"]] })).toEqual({ file: f, operation: "replace_body_span", target: { symbol: "fn", range: "body" }, edit: { find: "old", replace: "new", occurrence: "last" } });
+		expect(translateCompactOpParams({ f, ops: [["ib", "fn", "anchor", "before", "text", "only"]] })).toEqual({ file: f, operation: "insert_body_span", target: { symbol: "fn", range: "body" }, edit: { anchor: "anchor", position: "before", text: "text", occurrence: "only" } });
+		expect(translateCompactOpParams({ f, ops: [["wb", "fn", "before", "after", 2]] })).toEqual({ file: f, operation: "wrap_body", target: { symbol: "fn", range: "body" }, edit: { before: "before", keep: "body", after: "after", indentKeptBodyBy: 2 } });
+		expect(translateCompactOpParams({ f, ops: [["tc", "fn", "catchBody", 2]] })).toEqual({ file: f, operation: "patch", edit: { ops: [["try_catch", "fn", "catchBody", 2]] } });
+		expect(translateCompactOpParams({ f, ops: [["ru", "old", "new"]], p: true })).toEqual({ file: f, operation: "replace_unique", edit: { find: "old", replace: "new" }, dry_run: true });
+		expect(translateCompactOpParams({ f, ops: [["ia", "anchor", "text", "before"]] })).toEqual({ file: f, operation: "insert_before_anchor", edit: { anchor: "anchor", text: "text" } });
+		expect(translateCompactOpParams({ f, ops: [["ia", "after", "anchor", "text"]] })).toEqual({ file: f, operation: "insert_after_anchor", edit: { anchor: "anchor", text: "text" } });
+		expect(translateCompactOpParams({ f, ops: [["bt", "start", "end", "new"]] })).toEqual({ file: f, operation: "replace_between", edit: { start: "start", end: "end", replace: "new" } });
+		expect(translateCompactOpParams({ f, ops: [["as", "## Notes", "body"]] })).toEqual({ file: f, operation: "append_section", edit: { heading: "## Notes", text: "body" } });
+		expect(translateCompactOpParams({ f, ops: [["ek", "line"]] })).toEqual({ file: f, operation: "ensure_line", edit: { line: "line" } });
+		expect(translateCompactOpParams({ f, ops: [["dk", 3, 9, "remove"]] })).toEqual({ file: f, operation: "delete_range", edit: { start: 3, end: 9, expected: "remove" } });
+		expect(translateCompactOpParams({ f, ops: [["sk", "name", "value"]] })).toEqual({ file: f, operation: "set_key", edit: { key: "name", value: "value" } });
+	});
+
+	test("pi_blitz_op fails closed for malformed aliases", () => {
+		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["dk", "3", "9", "remove"]] })).toThrow(InvalidParamsError);
+		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["dk", 3, 9]] })).toThrow(InvalidParamsError);
+		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["as", "## Notes"]] })).toThrow(InvalidParamsError);
+		expect(() => translateCompactOpParams({ f: "src/app.ts", ops: [["rr", "fn", "last"]] })).toThrow(InvalidParamsError);
 	});
 
 	test("pi_blitz_apply schema rejects unknown operation", () => {
