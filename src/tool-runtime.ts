@@ -98,7 +98,9 @@ export const runTool = async <A>(
 	throw new Error(`pi-blitz failed: ${Cause.pretty(exit.cause)}`);
 };
 
-const renderSoftText = (err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>): string => {
+const renderSoftText = (
+	err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>,
+): string => {
 	const suggest = err.suggest ? `\nsuggest: ${err.suggest}` : "";
 	return `pi-blitz ${err.reason}: ${err.stderr.trim()}${suggest}`;
 };

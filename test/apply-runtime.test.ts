@@ -22,7 +22,7 @@ const spawnCollectMock = mock(async () => ({
 	stderr: "",
 	exitCode: 0,
 	durationMs: 10,
-}) );
+}));
 
 await mock.module("../src/spawn.js", () => ({
 	spawnCollectNode: spawnCollectMock,
@@ -39,7 +39,10 @@ describe("pi_blitz_apply runtime path", () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "pi-blitz-apply-"));
 		file = join(tmpDir, "app.ts");
 		writeFileSync(file, "export function foo() { return 1; }\n");
-		writeFileSync(join(tmpDir, "other.ts"), "export function bar() { return 3; }\n");
+		writeFileSync(
+			join(tmpDir, "other.ts"),
+			"export function bar() { return 3; }\n",
+		);
 	});
 
 	afterEach(() => {
@@ -60,11 +63,18 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("replace_body_span");
 		expect(payload.target).toEqual({ symbol: "foo", range: "body" });
-		expect(payload.edit).toEqual({ find: "return 1;", replace: "return 2;", occurrence: "only" });
+		expect(payload.edit).toEqual({
+			find: "return 1;",
+			replace: "return 2;",
+			occurrence: "only",
+		});
 	});
 
 	test("narrow wrap_body invokes blitz apply without body text", async () => {
@@ -78,7 +88,10 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("wrap_body");
 		expect(payload.edit).toEqual({
@@ -94,19 +107,48 @@ describe("pi_blitz_apply runtime path", () => {
 		await tool.execute("1", {
 			file: "app.ts",
 			edits: [
-				{ symbol: "foo", op: "replace_body_span", find: "return 1;", replace: "return 2;", occurrence: "only" },
-				{ symbol: "bar", op: "wrap_body", before: "\n  try {", keep: "body", after: "  } finally {}\n", indentKeptBodyBy: 2 },
+				{
+					symbol: "foo",
+					op: "replace_body_span",
+					find: "return 1;",
+					replace: "return 2;",
+					occurrence: "only",
+				},
+				{
+					symbol: "bar",
+					op: "wrap_body",
+					before: "\n  try {",
+					keep: "body",
+					after: "  } finally {}\n",
+					indentKeptBodyBy: 2,
+				},
 			],
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("multi_body");
 		expect(payload.target).toBeUndefined();
 		expect(payload.edit.edits).toEqual([
-			{ symbol: "foo", op: "replace_body_span", find: "return 1;", replace: "return 2;", occurrence: "only" },
-			{ symbol: "bar", op: "wrap_body", before: "\n  try {", keep: "body", after: "  } finally {}\n", indentKeptBodyBy: 2 },
+			{
+				symbol: "foo",
+				op: "replace_body_span",
+				find: "return 1;",
+				replace: "return 2;",
+				occurrence: "only",
+			},
+			{
+				symbol: "bar",
+				op: "wrap_body",
+				before: "\n  try {",
+				keep: "body",
+				after: "  } finally {}\n",
+				indentKeptBodyBy: 2,
+			},
 		]);
 	});
 
@@ -124,7 +166,10 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("patch");
 		expect(payload.target).toBeUndefined();
@@ -147,10 +192,15 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("patch");
-		expect(payload.edit.ops).toEqual([["try_catch", "handle", "console.error(error);\nthrow error;", 2]]);
+		expect(payload.edit.ops).toEqual([
+			["try_catch", "handle", "console.error(error);\nthrow error;", 2],
+		]);
 	});
 
 	test("narrow replace_return invokes patch tuple", async () => {
@@ -163,10 +213,15 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("patch");
-		expect(payload.edit.ops).toEqual([["replace_return", "handle", "value + 1", "last"]]);
+		expect(payload.edit.ops).toEqual([
+			["replace_return", "handle", "value + 1", "last"],
+		]);
 	});
 
 	test("blitz_edit previews same-file multi-op group then applies with one compact request", async () => {
@@ -183,10 +238,33 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(result.content[0]?.text).toContain("groupedApply=true");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
 
-		const previewCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
-		const applyCall = spawnCollectMock.mock.calls[1] as unknown as [string[], { stdin: string }];
-		expect(previewCall[0]).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json", "--dry-run"]);
-		expect(applyCall[0]).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json"]);
+		const previewCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const applyCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(previewCall[0]).toEqual([
+			"blitz",
+			"--workspace-root",
+			tmpDir,
+			"apply",
+			"--edit",
+			"-",
+			"--json",
+			"--dry-run",
+		]);
+		expect(applyCall[0]).toEqual([
+			"blitz",
+			"--workspace-root",
+			tmpDir,
+			"apply",
+			"--edit",
+			"-",
+			"--json",
+		]);
 		expect(JSON.parse(previewCall[1].stdin).ops).toEqual([
 			["x", "return 1;", "return 2;"],
 			["x", "const a = 1;", "const a = 2;"],
@@ -210,10 +288,22 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(result.content[0]?.text).toContain("crossFileAtomic=false");
 		expect(result.details?.crossFileAtomic).toBe(false);
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
-		const first = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
-		const second = spawnCollectMock.mock.calls[1] as unknown as [string[], { stdin: string }];
-		const third = spawnCollectMock.mock.calls[2] as unknown as [string[], { stdin: string }];
-		const fourth = spawnCollectMock.mock.calls[3] as unknown as [string[], { stdin: string }];
+		const first = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const second = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const third = spawnCollectMock.mock.calls[2] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const fourth = spawnCollectMock.mock.calls[3] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		expect(first[0]).toContain("--dry-run");
 		expect(second[0]).toContain("--dry-run");
 		expect(third[0]).not.toContain("--dry-run");
@@ -238,11 +328,24 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
 		expect(result.content[0]?.text).toContain("status=applied");
 
-		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
 		expect(firstCall).toBeDefined();
 		const cmd = firstCall[0];
 		const opts = firstCall[1];
-		expect(cmd).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json", "--dry-run", "--diff"]);
+		expect(cmd).toEqual([
+			"blitz",
+			"--workspace-root",
+			tmpDir,
+			"apply",
+			"--edit",
+			"-",
+			"--json",
+			"--dry-run",
+			"--diff",
+		]);
 		const payload = JSON.parse(opts.stdin);
 		expect(payload.version).toBe(1);
 		expect(payload.file).toBe(file);

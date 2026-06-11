@@ -1889,7 +1889,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			});
 
-			const groups = new Map<string, Array<string | number | boolean>[] >();
+			const groups = new Map<string, Array<string | number | boolean>[]>();
 			for (const job of jobs) {
 				const group = groups.get(job.f);
 				if (group) group.push(job.op);
