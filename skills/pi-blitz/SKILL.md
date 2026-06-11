@@ -11,6 +11,7 @@ Use:
 
 ```ts
 blitz_edit({ f: "src/a.ts", e: [["x", "old", "new"]] })
+blitz_edit({ e: [["x", "src/a.ts", "old", "new"], ["x", "src/b.ts", "old", "new"]] })
 ```
 
 Rules:

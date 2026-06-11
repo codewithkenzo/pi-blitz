@@ -1,16 +1,15 @@
 {
-  "generatedAt": "2026-06-11T18:34:56.787Z",
+  "generatedAt": "2026-06-11T18:41:46.005Z",
   "profile": "minimal",
   "profileLabel": "minimal-v0",
   "tools": [
     {
       "name": "blitz_edit",
       "label": "blitz edit",
-      "description": "Blitz edit. Args {f,e}. e tuples: [x,old,new].",
+      "description": "Blitz edit. Args {f?,e}. Tuples: [x,old,new] or [x,file,old,new].",
       "parameters": {
         "type": "object",
         "required": [
-          "f",
           "e"
         ],
         "properties": {
@@ -24,25 +23,55 @@
             "maxItems": 64,
             "type": "array",
             "items": {
-              "type": "array",
-              "items": [
+              "anyOf": [
                 {
-                  "const": "x",
-                  "type": "string"
+                  "type": "array",
+                  "items": [
+                    {
+                      "const": "x",
+                      "type": "string"
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 65536,
+                      "type": "string"
+                    },
+                    {
+                      "maxLength": 65536,
+                      "type": "string"
+                    }
+                  ],
+                  "additionalItems": false,
+                  "minItems": 3,
+                  "maxItems": 3
                 },
                 {
-                  "minLength": 1,
-                  "maxLength": 65536,
-                  "type": "string"
-                },
-                {
-                  "maxLength": 65536,
-                  "type": "string"
+                  "type": "array",
+                  "items": [
+                    {
+                      "const": "x",
+                      "type": "string"
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 65536,
+                      "type": "string"
+                    },
+                    {
+                      "maxLength": 65536,
+                      "type": "string"
+                    }
+                  ],
+                  "additionalItems": false,
+                  "minItems": 4,
+                  "maxItems": 4
                 }
-              ],
-              "additionalItems": false,
-              "minItems": 3,
-              "maxItems": 3
+              ]
             }
           }
         }

@@ -172,12 +172,20 @@ export const opTupleValueSchema = Type.Union(
 );
 
 export const blitzEditToolParamsSchema = Type.Object({
-	f: Type.String({ minLength: 1, maxLength: PATH_MAX }),
+	f: Type.Optional(Type.String({ minLength: 1, maxLength: PATH_MAX })),
 	e: Type.Array(
-		Type.Tuple([
-			Type.Literal("x"),
-			Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
-			Type.String({ maxLength: SNIPPET_MAX }),
+		Type.Union([
+			Type.Tuple([
+				Type.Literal("x"),
+				Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
+				Type.String({ maxLength: SNIPPET_MAX }),
+			]),
+			Type.Tuple([
+				Type.Literal("x"),
+				Type.String({ minLength: 1, maxLength: PATH_MAX }),
+				Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
+				Type.String({ maxLength: SNIPPET_MAX }),
+			]),
 		]),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -1248,8 +1256,8 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 };
 
 type BlitzEditParams = {
-	f: string;
-	e: Array<[string, string, string]>;
+	f?: string;
+	e: Array<["x", string, string] | ["x", string, string, string]>;
 };
 
 type CompactOpParams = {
@@ -1842,20 +1850,43 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 	({
 		name: "blitz_edit",
 		label: "blitz edit",
-		description: "Blitz edit. Args {f,e}. e tuples: [x,old,new].",
+		description: "Blitz edit. Args {f?,e}. Tuples: [x,old,new] or [x,file,old,new].",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
 			params: BlitzEditParams,
 		): Promise<BlitzToolResult> => {
-			const ops = params.e.map((tuple) => {
+			const jobs = params.e.map((tuple) => {
 				if (tuple[0] !== "x") {
 					throw new InvalidParamsError({ reason: "e only supports x tuples" });
 				}
-				return tuple;
+				if (tuple.length === 3) {
+					if (!isNonEmptyString(params.f)) {
+						throw new InvalidParamsError({ reason: "f is required for 3-item x tuples" });
+					}
+					return { f: params.f, op: ["x", tuple[1], tuple[2]] as [string, string, string] };
+				}
+				return { f: tuple[1], op: ["x", tuple[2], tuple[3]] as [string, string, string] };
 			});
-			return executeCompactOpParams(binary, cwd, { f: params.f, ops });
-		},
+
+			for (const job of jobs) {
+				const preview = await executeCompactOpParams(binary, cwd, {
+					f: job.f,
+					ops: [job.op],
+					p: true,
+				});
+				if (preview.isError) return preview;
+			}
+
+			for (const job of jobs) {
+				const applied = await executeCompactOpParams(binary, cwd, {
+					f: job.f,
+					ops: [job.op],
+				});
+				if (applied.isError) return applied;
+			}
+			return okResult(`ok c=${jobs.length}`);
+		}, 
 	}) as const;
 
 export const opToolDef = (binary: string, cwd: string) =>
