@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	batchToolDef,
+	blitzEditToolDef,
 	composeBodyToolDef,
 	doctorToolDef,
 	editToolDef,
@@ -26,7 +27,7 @@ type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
 type ToolFactory = (binary: string, cwd: string) => ToolDef;
 
 const PROFILE_TOOLS = {
-	minimal: [opToolDef],
+	minimal: [blitzEditToolDef],
 	router: [routeEditToolDef],
 	semantic: [opToolDef, patchToolDef, tryCatchToolDef, replaceReturnToolDef],
 	structural: [opToolDef, replaceBodySpanToolDef, multiBodyToolDef, patchToolDef],

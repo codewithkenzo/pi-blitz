@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-06-11T18:34:56.787Z",
+  "profile": "minimal",
+  "profileLabel": "minimal-v0",
+  "tools": [
+    {
+      "name": "blitz_edit",
+      "label": "blitz edit",
+      "description": "Blitz edit. Args {f,e}. e tuples: [x,old,new].",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "f",
+          "e"
+        ],
+        "properties": {
+          "f": {
+            "minLength": 1,
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "e": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": [
+                {
+                  "const": "x",
+                  "type": "string"
+                },
+                {
+                  "minLength": 1,
+                  "maxLength": 65536,
+                  "type": "string"
+                },
+                {
+                  "maxLength": 65536,
+                  "type": "string"
+                }
+              ],
+              "additionalItems": false,
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
+        }
+      }
+    }
+  ]
+}

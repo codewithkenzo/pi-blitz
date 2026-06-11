@@ -171,6 +171,18 @@ export const opTupleValueSchema = Type.Union(
 	},
 );
 
+export const blitzEditToolParamsSchema = Type.Object({
+	f: Type.String({ minLength: 1, maxLength: PATH_MAX }),
+	e: Type.Array(
+		Type.Tuple([
+			Type.Literal("x"),
+			Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
+			Type.String({ maxLength: SNIPPET_MAX }),
+		]),
+		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
+	),
+});
+
 export const opToolParamsSchema = Type.Object({
 	f: pathSchema,
 	ops: Type.Optional(
@@ -1235,6 +1247,11 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 	edits: Array<MultiBodyEditItem>;
 };
 
+type BlitzEditParams = {
+	f: string;
+	e: Array<[string, string, string]>;
+};
+
 type CompactOpParams = {
 	f: string;
 	ops?: Array<Array<string | number | boolean>>;
@@ -1820,6 +1837,26 @@ const toCommonApplyParams = (
 		? { include_diff: params.include_diff }
 		: {}),
 });
+
+export const blitzEditToolDef = (binary: string, cwd: string) =>
+	({
+		name: "blitz_edit",
+		label: "blitz edit",
+		description: "Blitz edit. Args {f,e}. e tuples: [x,old,new].",
+		parameters: blitzEditToolParamsSchema,
+		execute: async (
+			_tcid: string,
+			params: BlitzEditParams,
+		): Promise<BlitzToolResult> => {
+			const ops = params.e.map((tuple) => {
+				if (tuple[0] !== "x") {
+					throw new InvalidParamsError({ reason: "e only supports x tuples" });
+				}
+				return tuple;
+			});
+			return executeCompactOpParams(binary, cwd, { f: params.f, ops });
+		},
+	}) as const;
 
 export const opToolDef = (binary: string, cwd: string) =>
 	({

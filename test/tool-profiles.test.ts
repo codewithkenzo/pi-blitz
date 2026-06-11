@@ -32,9 +32,9 @@ const createFakePi = () => {
 };
 
 describe("pi-blitz tool profiles", () => {
-	test("minimal profile is minimal-v0 and registers only compact op surface", () => {
+	test("minimal profile is minimal-v0 and registers only default Blitz edit surface", () => {
 		expect(profileLabel("minimal")).toBe("minimal-v0");
-		expect(getProfiledToolNames("minimal")).toEqual(["pi_blitz_op"]);
+		expect(getProfiledToolNames("minimal")).toEqual(["blitz_edit"]);
 	});
 
 	test("semantic profile omits structural/admin schemas", () => {
@@ -88,7 +88,7 @@ describe("pi-blitz tool profiles", () => {
 		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
 		expect(specs.profileLabel).toBe("minimal-v0");
 		expect(specs.tools).toHaveLength(1);
-		expect(specs.tools[0]!.name).toBe("pi_blitz_op");
+		expect(specs.tools[0]!.name).toBe("blitz_edit");
 		expect("execute" in specs.tools[0]!).toBe(false);
 		expect(specs.tools[0]!.parameters).toBeTruthy();
 	});
@@ -104,7 +104,7 @@ describe("pi-blitz tool profiles", () => {
 
 		await piBlitz(pi);
 
-		expect(registeredToolNames).toEqual(["pi_blitz_op"]);
+		expect(registeredToolNames).toEqual(["blitz_edit"]);
 		expect(resourceHandlers).toHaveLength(1);
 	});
 
