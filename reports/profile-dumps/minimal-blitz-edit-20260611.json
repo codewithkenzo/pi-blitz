@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-11T18:59:01.767Z",
+  "generatedAt": "2026-06-11T21:01:16.752Z",
   "profile": "minimal",
   "profileLabel": "minimal-v0",
   "tools": [
@@ -23,94 +23,25 @@
             "maxItems": 64,
             "type": "array",
             "items": {
-              "anyOf": [
-                {
-                  "type": "array",
-                  "items": [
-                    {
-                      "const": "x",
-                      "type": "string"
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 65536,
-                      "type": "string"
-                    },
-                    {
-                      "maxLength": 65536,
-                      "type": "string"
-                    }
-                  ],
-                  "additionalItems": false,
-                  "minItems": 3,
-                  "maxItems": 3
-                },
-                {
-                  "type": "array",
-                  "items": [
-                    {
-                      "const": "x",
-                      "type": "string"
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 4096,
-                      "type": "string"
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 65536,
-                      "type": "string"
-                    },
-                    {
-                      "maxLength": 65536,
-                      "type": "string"
-                    }
-                  ],
-                  "additionalItems": false,
-                  "minItems": 4,
-                  "maxItems": 4
-                },
-                {
-                  "type": "array",
-                  "items": [
-                    {
-                      "anyOf": [
-                        {
-                          "const": "rb",
-                          "type": "string"
-                        },
-                        {
-                          "const": "ia",
-                          "type": "string"
-                        }
-                      ]
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 4096,
-                      "type": "string"
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 32,
-                      "type": "string"
-                    },
-                    {
-                      "minLength": 1,
-                      "maxLength": 512,
-                      "type": "string"
-                    },
-                    {
-                      "maxLength": 65536,
-                      "type": "string"
-                    }
-                  ],
-                  "additionalItems": false,
-                  "minItems": 5,
-                  "maxItems": 5
-                }
-              ]
+              "minItems": 3,
+              "maxItems": 5,
+              "description": "OpenAI-compatible edit tuple. Supported shapes: ['x',old,new], ['x',file,old,new], ['rb'|'ia',file,kind,name,text]. Runtime still validates op and tuple length.",
+              "type": "array",
+              "items": {
+                "description": "Compact op tuple item.",
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
             }
           }
         }
