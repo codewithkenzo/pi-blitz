@@ -186,6 +186,13 @@ export const blitzEditToolParamsSchema = Type.Object({
 				Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
 				Type.String({ maxLength: SNIPPET_MAX }),
 			]),
+			Type.Tuple([
+				Type.Union([Type.Literal("rb"), Type.Literal("ia")]),
+				Type.String({ minLength: 1, maxLength: PATH_MAX }),
+				Type.String({ minLength: 1, maxLength: 32 }),
+				Type.String({ minLength: 1, maxLength: 512 }),
+				Type.String({ maxLength: SNIPPET_MAX }),
+			]),
 		]),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -1257,7 +1264,7 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 
 type BlitzEditParams = {
 	f?: string;
-	e: Array<["x", string, string] | ["x", string, string, string]>;
+	e: Array<["x", string, string] | ["x", string, string, string] | ["rb" | "ia", string, string, string, string]>;
 };
 
 type CompactOpParams = {
@@ -1850,23 +1857,26 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 	({
 		name: "blitz_edit",
 		label: "blitz edit",
-		description: "Blitz edit. Args {f?,e}. Tuples: [x,old,new] or [x,file,old,new].",
+		description: "Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
 			params: BlitzEditParams,
 		): Promise<BlitzToolResult> => {
 			const jobs = params.e.map((tuple) => {
-				if (tuple[0] !== "x") {
-					throw new InvalidParamsError({ reason: "e only supports x tuples" });
-				}
-				if (tuple.length === 3) {
-					if (!isNonEmptyString(params.f)) {
-						throw new InvalidParamsError({ reason: "f is required for 3-item x tuples" });
+				if (tuple[0] === "x") {
+					if (tuple.length === 3) {
+						if (!isNonEmptyString(params.f)) {
+							throw new InvalidParamsError({ reason: "f is required for 3-item x tuples" });
+						}
+						return { f: params.f, op: ["x", tuple[1], tuple[2]] as Array<string | number | boolean> };
 					}
-					return { f: params.f, op: ["x", tuple[1], tuple[2]] as [string, string, string] };
+					return { f: tuple[1], op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean> };
 				}
-				return { f: tuple[1], op: ["x", tuple[2], tuple[3]] as [string, string, string] };
+				if (tuple[0] === "rb" || tuple[0] === "ia") {
+					return { f: tuple[1], op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<string | number | boolean> };
+				}
+				throw new InvalidParamsError({ reason: "e only supports x/rb/ia tuples" });
 			});
 
 			for (const job of jobs) {

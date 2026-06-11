@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-06-11T18:41:46.005Z",
+  "generatedAt": "2026-06-11T18:59:01.767Z",
   "profile": "minimal",
   "profileLabel": "minimal-v0",
   "tools": [
     {
       "name": "blitz_edit",
       "label": "blitz edit",
-      "description": "Blitz edit. Args {f?,e}. Tuples: [x,old,new] or [x,file,old,new].",
+      "description": "Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
       "parameters": {
         "type": "object",
         "required": [
@@ -70,6 +70,45 @@
                   "additionalItems": false,
                   "minItems": 4,
                   "maxItems": 4
+                },
+                {
+                  "type": "array",
+                  "items": [
+                    {
+                      "anyOf": [
+                        {
+                          "const": "rb",
+                          "type": "string"
+                        },
+                        {
+                          "const": "ia",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 32,
+                      "type": "string"
+                    },
+                    {
+                      "minLength": 1,
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    {
+                      "maxLength": 65536,
+                      "type": "string"
+                    }
+                  ],
+                  "additionalItems": false,
+                  "minItems": 5,
+                  "maxItems": 5
                 }
               ]
             }
