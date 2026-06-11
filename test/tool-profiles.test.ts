@@ -93,6 +93,15 @@ describe("pi-blitz tool profiles", () => {
 		expect(specs.tools[0]!.parameters).toBeTruthy();
 	});
 
+	test("minimal blitz_edit schema avoids tuple items arrays for OpenAI", () => {
+		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
+		const parameters = specs.tools[0]!.parameters as Record<string, unknown>;
+		const properties = parameters.properties as Record<string, unknown>;
+		const eSchema = properties.e as { items?: { items?: unknown } };
+		expect(Array.isArray(eSchema.items?.items)).toBe(false);
+		expect(eSchema.items?.items).toBeTruthy();
+	});
+
 	test("missing and empty profile resolve to minimal", () => {
 		expect(resolvePiBlitzToolProfile(undefined)).toBe("minimal");
 		expect(resolvePiBlitzToolProfile("")).toBe("minimal");

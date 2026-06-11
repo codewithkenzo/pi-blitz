@@ -174,26 +174,12 @@ export const opTupleValueSchema = Type.Union(
 export const blitzEditToolParamsSchema = Type.Object({
 	f: Type.Optional(Type.String({ minLength: 1, maxLength: PATH_MAX })),
 	e: Type.Array(
-		Type.Union([
-			Type.Tuple([
-				Type.Literal("x"),
-				Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
-				Type.String({ maxLength: SNIPPET_MAX }),
-			]),
-			Type.Tuple([
-				Type.Literal("x"),
-				Type.String({ minLength: 1, maxLength: PATH_MAX }),
-				Type.String({ minLength: 1, maxLength: SNIPPET_MAX }),
-				Type.String({ maxLength: SNIPPET_MAX }),
-			]),
-			Type.Tuple([
-				Type.Union([Type.Literal("rb"), Type.Literal("ia")]),
-				Type.String({ minLength: 1, maxLength: PATH_MAX }),
-				Type.String({ minLength: 1, maxLength: 32 }),
-				Type.String({ minLength: 1, maxLength: 512 }),
-				Type.String({ maxLength: SNIPPET_MAX }),
-			]),
-		]),
+		Type.Array(opTupleValueSchema, {
+			minItems: 3,
+			maxItems: 5,
+			description:
+				"OpenAI-compatible edit tuple. Supported shapes: ['x',old,new], ['x',file,old,new], ['rb'|'ia',file,kind,name,text]. Runtime still validates op and tuple length.",
+		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
 });
