@@ -1250,7 +1250,11 @@ type MultiBodyParams = Omit<NarrowCommonParams, "symbol"> & {
 
 type BlitzEditParams = {
 	f?: string;
-	e: Array<["x", string, string] | ["x", string, string, string] | ["rb" | "ia", string, string, string, string]>;
+	e: Array<
+		| ["x", string, string]
+		| ["x", string, string, string]
+		| ["rb" | "ia", string, string, string, string]
+	>;
 };
 
 type CompactOpParams = {
@@ -1683,7 +1687,11 @@ const executeCompactOpParams = (
 			throw err;
 		}
 		const request = JSON.stringify(requestPayload);
-		const tooBig = assertByteCap(request, APPLY_MAX_PAYLOAD, "compact apply request");
+		const tooBig = assertByteCap(
+			request,
+			APPLY_MAX_PAYLOAD,
+			"compact apply request",
+		);
 		if (tooBig !== null) return yield* Effect.fail(tooBig);
 		const argv = ["apply", "--edit", "-", "--json"];
 		if (params.p === true) argv.push("--dry-run");
@@ -1843,7 +1851,8 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 	({
 		name: "blitz_edit",
 		label: "blitz edit",
-		description: "Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
+		description:
+			"Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
@@ -1853,16 +1862,31 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				if (tuple[0] === "x") {
 					if (tuple.length === 3) {
 						if (!isNonEmptyString(params.f)) {
-							throw new InvalidParamsError({ reason: "f is required for 3-item x tuples" });
+							throw new InvalidParamsError({
+								reason: "f is required for 3-item x tuples",
+							});
 						}
-						return { f: params.f, op: ["x", tuple[1], tuple[2]] as Array<string | number | boolean> };
+						return {
+							f: params.f,
+							op: ["x", tuple[1], tuple[2]] as Array<string | number | boolean>,
+						};
 					}
-					return { f: tuple[1], op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean> };
+					return {
+						f: tuple[1],
+						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
+					};
 				}
 				if (tuple[0] === "rb" || tuple[0] === "ia") {
-					return { f: tuple[1], op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<string | number | boolean> };
+					return {
+						f: tuple[1],
+						op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<
+							string | number | boolean
+						>,
+					};
 				}
-				throw new InvalidParamsError({ reason: "e only supports x/rb/ia tuples" });
+				throw new InvalidParamsError({
+					reason: "e only supports x/rb/ia tuples",
+				});
 			});
 
 			for (const job of jobs) {
@@ -1882,7 +1906,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				if (applied.isError) return applied;
 			}
 			return okResult(`ok c=${jobs.length}`);
-		}, 
+		},
 	}) as const;
 
 export const opToolDef = (binary: string, cwd: string) =>

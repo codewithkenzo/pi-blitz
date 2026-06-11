@@ -63,7 +63,9 @@ describe("pi-blitz tool profiles", () => {
 		]);
 		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_doctor");
 		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_edit");
-		expect(getProfiledToolNames("structural")).not.toContain("pi_blitz_wrap_body");
+		expect(getProfiledToolNames("structural")).not.toContain(
+			"pi_blitz_wrap_body",
+		);
 	});
 
 	test("admin profile exposes admin helpers only", () => {
