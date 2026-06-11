@@ -39,6 +39,7 @@ describe("pi_blitz_apply runtime path", () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "pi-blitz-apply-"));
 		file = join(tmpDir, "app.ts");
 		writeFileSync(file, "export function foo() { return 1; }\n");
+		writeFileSync(join(tmpDir, "other.ts"), "export function bar() { return 3; }\n");
 	});
 
 	afterEach(() => {
@@ -166,6 +167,57 @@ describe("pi_blitz_apply runtime path", () => {
 		const payload = JSON.parse(firstCall[1].stdin);
 		expect(payload.operation).toBe("patch");
 		expect(payload.edit.ops).toEqual([["replace_return", "handle", "value + 1", "last"]]);
+	});
+
+	test("blitz_edit previews same-file multi-op group then applies with one compact request", async () => {
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			e: [
+				["x", "return 1;", "return 2;"],
+				["x", "const a = 1;", "const a = 2;"],
+			],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("groupedApply=true");
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+
+		const previewCall = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const applyCall = spawnCollectMock.mock.calls[1] as unknown as [string[], { stdin: string }];
+		expect(previewCall[0]).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json", "--dry-run"]);
+		expect(applyCall[0]).toEqual(["blitz", "--workspace-root", tmpDir, "apply", "--edit", "-", "--json"]);
+		expect(JSON.parse(previewCall[1].stdin).ops).toEqual([
+			["x", "return 1;", "return 2;"],
+			["x", "const a = 1;", "const a = 2;"],
+		]);
+		expect(JSON.parse(applyCall[1].stdin).ops).toEqual([
+			["x", "return 1;", "return 2;"],
+			["x", "const a = 1;", "const a = 2;"],
+		]);
+	});
+
+	test("blitz_edit previews all file groups before any grouped apply and reports cross-file limit", async () => {
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			e: [
+				["x", "app.ts", "return 1;", "return 2;"],
+				["x", "other.ts", "return 3;", "return 4;"],
+			],
+		});
+
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("crossFileAtomic=false");
+		expect(result.details?.crossFileAtomic).toBe(false);
+		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
+		const first = spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }];
+		const second = spawnCollectMock.mock.calls[1] as unknown as [string[], { stdin: string }];
+		const third = spawnCollectMock.mock.calls[2] as unknown as [string[], { stdin: string }];
+		const fourth = spawnCollectMock.mock.calls[3] as unknown as [string[], { stdin: string }];
+		expect(first[0]).toContain("--dry-run");
+		expect(second[0]).toContain("--dry-run");
+		expect(third[0]).not.toContain("--dry-run");
+		expect(fourth[0]).not.toContain("--dry-run");
 	});
 
 	test("invokes blitz apply --edit - --json with JSON IR", async () => {

@@ -50,6 +50,11 @@ export interface PiBlitzDetails {
 	outputTokensExpected?: number;
 	fallbackContextTokensExpected?: number;
 	selectedBecause?: string;
+	count?: number;
+	files?: number;
+	groupedApply?: boolean;
+	crossFileAtomic?: boolean;
+	atomicityNote?: string;
 }
 
 export interface BlitzToolResult {

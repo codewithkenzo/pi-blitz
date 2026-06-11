@@ -1889,23 +1889,50 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			});
 
+			const groups = new Map<string, Array<string | number | boolean>[] >();
 			for (const job of jobs) {
+				const group = groups.get(job.f);
+				if (group) group.push(job.op);
+				else groups.set(job.f, [job.op]);
+			}
+			const groupedJobs = Array.from(groups, ([f, ops]) => ({ f, ops }));
+
+			for (const job of groupedJobs) {
 				const preview = await executeCompactOpParams(binary, cwd, {
 					f: job.f,
-					ops: [job.op],
+					ops: job.ops,
 					p: true,
 				});
 				if (preview.isError) return preview;
 			}
 
-			for (const job of jobs) {
+			for (const job of groupedJobs) {
 				const applied = await executeCompactOpParams(binary, cwd, {
 					f: job.f,
-					ops: [job.op],
+					ops: job.ops,
 				});
 				if (applied.isError) return applied;
 			}
-			return okResult(`ok c=${jobs.length}`);
+			const crossFileNote =
+				groupedJobs.length > 1
+					? " crossFileAtomic=false reason=Blitz CLI has no multi-file transaction; previews all files before grouped applies."
+					: "";
+			return okResult(
+				`ok c=${jobs.length} files=${groupedJobs.length} groupedApply=true${crossFileNote}`,
+				{
+					status: "applied",
+					count: jobs.length,
+					files: groupedJobs.length,
+					groupedApply: true,
+					crossFileAtomic: groupedJobs.length <= 1,
+					...(groupedJobs.length > 1
+						? {
+								atomicityNote:
+									"Blitz CLI has no multi-file transaction; pi-blitz previews all files before grouped applies, but cross-file apply can still partially mutate if a later file apply fails.",
+							}
+						: {}),
+				},
+			);
 		},
 	}) as const;
 
