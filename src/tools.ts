@@ -178,7 +178,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 			minItems: 3,
 			maxItems: 5,
 			description:
-				"OpenAI-compatible edit tuple. Supported shapes: ['x',old,new], ['x',file,old,new], ['rb'|'ia',file,kind,name,text]. Runtime still validates op and tuple length.",
+				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new] for exact replacements. ['x',old,new] is allowed only when top-level f is present. Structural: ['rb'|'ia',file,kind,name,text]. Runtime validates op and tuple length.",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -345,7 +345,7 @@ type BlitzCompactApplyPayload = {
 
 // Soft-error classifier — matches the signal taxonomy in docs/architecture/blitz.md.
 const classifySoft = (
-	_stdout: string,
+	stdout: string,
 	stderr: string,
 ): BlitzSoftError | undefined => {
 	if (/^No undo history for /m.test(stderr)) {
@@ -357,10 +357,36 @@ const classifySoft = (
 	if (/^Error: no code references to /m.test(stderr)) {
 		return new BlitzSoftError({ reason: "no-references", stderr });
 	}
+	const jsonError =
+		extractBlitzJsonError(stdout) ?? extractBlitzJsonError(stderr);
+	if (jsonError !== undefined) {
+		return new BlitzSoftError({ reason: "blitz-error", stderr: jsonError });
+	}
 	// Stdout-only soft states are informational, handled separately.
 	return stderr.trim().length > 0
 		? new BlitzSoftError({ reason: "blitz-error", stderr })
 		: undefined;
+};
+
+const extractBlitzJsonError = (text: string): string | undefined => {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("{")) return undefined;
+	try {
+		const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+		const code = typeof parsed.code === "string" ? parsed.code : undefined;
+		const reason =
+			typeof parsed.reason === "string"
+				? parsed.reason
+				: typeof parsed.message === "string"
+					? parsed.message
+					: typeof parsed.error === "string"
+						? parsed.error
+						: undefined;
+		if (code === undefined && reason === undefined) return undefined;
+		return [code, reason].filter(Boolean).join(": ");
+	} catch {
+		return undefined;
+	}
 };
 
 const okResult = (
@@ -1852,7 +1878,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
+			"Blitz edit. Args {f?,e}. Exact replacement: prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. Structural: [rb|ia,file,kind,name,text].",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
@@ -1889,15 +1915,11 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			});
 
-			const groups = new Map<string, Array<string | number | boolean>[]>();
-			for (const job of jobs) {
-				const group = groups.get(job.f);
-				if (group) group.push(job.op);
-				else groups.set(job.f, [job.op]);
-			}
-			const groupedJobs = Array.from(groups, ([f, ops]) => ({ f, ops }));
+			const safeUnits = jobs.map((job) => ({ f: job.f, ops: [job.op] }));
+			const uniqueFiles = new Set(safeUnits.map((job) => job.f));
+			const sequentialApply = safeUnits.length > 1;
 
-			for (const job of groupedJobs) {
+			for (const job of safeUnits) {
 				const preview = await executeCompactOpParams(binary, cwd, {
 					f: job.f,
 					ops: job.ops,
@@ -1906,7 +1928,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				if (preview.isError) return preview;
 			}
 
-			for (const job of groupedJobs) {
+			for (const job of safeUnits) {
 				const applied = await executeCompactOpParams(binary, cwd, {
 					f: job.f,
 					ops: job.ops,
@@ -1914,21 +1936,26 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				if (applied.isError) return applied;
 			}
 			const crossFileNote =
-				groupedJobs.length > 1
-					? " crossFileAtomic=false reason=Blitz CLI has no multi-file transaction; previews all files before grouped applies."
+				uniqueFiles.size > 1
+					? " crossFileAtomic=false reason=Blitz CLI has no multi-file transaction; previews all safe units before sequential applies."
+					: "";
+			const sequentialNote = sequentialApply
+				? " groupedApply=false sequentialApply=true sameFileAtomic=false reason=Blitz CLI compact grouped exact replacements are unsupported; previews every safe unit before applying in order."
 					: "";
 			return okResult(
-				`ok c=${jobs.length} files=${groupedJobs.length} groupedApply=true${crossFileNote}`,
+				`ok c=${jobs.length} files=${uniqueFiles.size} groupedApply=${!sequentialApply} sequentialApply=${sequentialApply}${sequentialNote}${crossFileNote}`,
 				{
 					status: "applied",
 					count: jobs.length,
-					files: groupedJobs.length,
-					groupedApply: true,
-					crossFileAtomic: groupedJobs.length <= 1,
-					...(groupedJobs.length > 1
+					files: uniqueFiles.size,
+					groupedApply: !sequentialApply,
+					sequentialApply,
+					sameFileAtomic: !sequentialApply,
+					crossFileAtomic: uniqueFiles.size <= 1 && !sequentialApply,
+					...(sequentialApply || uniqueFiles.size > 1
 						? {
 								atomicityNote:
-									"Blitz CLI has no multi-file transaction; pi-blitz previews all files before grouped applies, but cross-file apply can still partially mutate if a later file apply fails.",
+									"Blitz CLI has no transaction for multiple compact safe units; pi-blitz previews every safe unit first, then applies units in order, so later apply failure can leave earlier units mutated.",
 							}
 						: {}),
 				},

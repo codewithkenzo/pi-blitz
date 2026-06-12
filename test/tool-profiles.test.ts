@@ -104,6 +104,23 @@ describe("pi-blitz tool profiles", () => {
 		expect(eSchema.items?.items).toBeTruthy();
 	});
 
+	test("minimal blitz_edit guidance says 3-item x requires f and prefers 4-item x", () => {
+		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
+		const tool = specs.tools[0]!;
+		expect(tool.description).toContain("prefer [x,file,old,new]");
+		expect(tool.description).toContain("3-item [x,old,new] requires top-level f");
+
+		const parameters = tool.parameters as Record<string, unknown>;
+		const properties = parameters.properties as Record<string, unknown>;
+		const eSchema = properties.e as { items?: { description?: string } };
+		expect(eSchema.items?.description).toContain(
+			"Prefer ['x',file,old,new]",
+		);
+		expect(eSchema.items?.description).toContain(
+			"['x',old,new] is allowed only when top-level f is present",
+		);
+	});
+
 	test("missing and empty profile resolve to minimal", () => {
 		expect(resolvePiBlitzToolProfile(undefined)).toBe("minimal");
 		expect(resolvePiBlitzToolProfile("")).toBe("minimal");

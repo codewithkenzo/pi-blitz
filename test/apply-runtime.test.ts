@@ -224,7 +224,7 @@ describe("pi_blitz_apply runtime path", () => {
 		]);
 	});
 
-	test("blitz_edit previews same-file multi-op group then applies with one compact request", async () => {
+	test("blitz_edit previews same-file multi exact ops individually then applies in order", async () => {
 		const tool = tools.blitzEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
 			f: "app.ts",
@@ -235,18 +235,30 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("groupedApply=true");
-		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		expect(result.content[0]?.text).toContain("groupedApply=false");
+		expect(result.content[0]?.text).toContain("sequentialApply=true");
+		expect(result.details?.groupedApply).toBe(false);
+		expect(result.details?.sequentialApply).toBe(true);
+		expect(result.details?.sameFileAtomic).toBe(false);
+		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 
-		const previewCall = spawnCollectMock.mock.calls[0] as unknown as [
+		const firstPreview = spawnCollectMock.mock.calls[0] as unknown as [
 			string[],
 			{ stdin: string },
 		];
-		const applyCall = spawnCollectMock.mock.calls[1] as unknown as [
+		const secondPreview = spawnCollectMock.mock.calls[1] as unknown as [
 			string[],
 			{ stdin: string },
 		];
-		expect(previewCall[0]).toEqual([
+		const firstApply = spawnCollectMock.mock.calls[2] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const secondApply = spawnCollectMock.mock.calls[3] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(firstPreview[0]).toEqual([
 			"blitz",
 			"--workspace-root",
 			tmpDir,
@@ -256,7 +268,8 @@ describe("pi_blitz_apply runtime path", () => {
 			"--json",
 			"--dry-run",
 		]);
-		expect(applyCall[0]).toEqual([
+		expect(secondPreview[0]).toContain("--dry-run");
+		expect(firstApply[0]).toEqual([
 			"blitz",
 			"--workspace-root",
 			tmpDir,
@@ -265,14 +278,72 @@ describe("pi_blitz_apply runtime path", () => {
 			"-",
 			"--json",
 		]);
-		expect(JSON.parse(previewCall[1].stdin).ops).toEqual([
+		expect(secondApply[0]).not.toContain("--dry-run");
+		expect(JSON.parse(firstPreview[1].stdin).ops).toEqual([
 			["x", "return 1;", "return 2;"],
+		]);
+		expect(JSON.parse(secondPreview[1].stdin).ops).toEqual([
 			["x", "const a = 1;", "const a = 2;"],
 		]);
-		expect(JSON.parse(applyCall[1].stdin).ops).toEqual([
+		expect(JSON.parse(firstApply[1].stdin).ops).toEqual([
 			["x", "return 1;", "return 2;"],
+		]);
+		expect(JSON.parse(secondApply[1].stdin).ops).toEqual([
 			["x", "const a = 1;", "const a = 2;"],
 		]);
+	});
+
+	test("blitz_edit surfaces nonzero Blitz JSON stdout errors", async () => {
+		spawnCollectMock.mockImplementationOnce(async () => ({
+			stdout: JSON.stringify({
+				code: "UNSUPPORTED_OPERATION",
+				reason: "grouped exact replacement unsupported",
+			}),
+			stderr: "",
+			exitCode: 1,
+			durationMs: 10,
+		}));
+
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			e: [["x", "return 1;", "return 2;"]],
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("UNSUPPORTED_OPERATION");
+		expect(result.content[0]?.text).toContain(
+			"grouped exact replacement unsupported",
+		);
+		expect(result.content[0]?.text).not.toBe("pi-blitz blitz-error: ");
+	});
+
+	test("blitz_edit reports safe-unit unsupported failure explicitly", async () => {
+		spawnCollectMock.mockImplementationOnce(async () => ({
+			stdout: "",
+			stderr: JSON.stringify({
+				code: "UNSUPPORTED_OPERATION",
+				reason: "same-file grouped exact replacement unsupported",
+			}),
+			exitCode: 1,
+			durationMs: 10,
+		}));
+
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			e: [
+				["x", "return 1;", "return 2;"],
+				["x", "const a = 1;", "const a = 2;"],
+			],
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("UNSUPPORTED_OPERATION");
+		expect(result.content[0]?.text).toContain(
+			"same-file grouped exact replacement unsupported",
+		);
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
 	});
 
 	test("blitz_edit previews all file groups before any grouped apply and reports cross-file limit", async () => {

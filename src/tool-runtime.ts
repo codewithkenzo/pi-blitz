@@ -53,6 +53,8 @@ export interface PiBlitzDetails {
 	count?: number;
 	files?: number;
 	groupedApply?: boolean;
+	sequentialApply?: boolean;
+	sameFileAtomic?: boolean;
 	crossFileAtomic?: boolean;
 	atomicityNote?: string;
 }
