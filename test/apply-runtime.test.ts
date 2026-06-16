@@ -864,6 +864,45 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(readFileSync(file, "utf8")).toBe(source);
 	});
 
+	test("route edit declines exported/default multiline signature first-line replacements", async () => {
+		const cases = [
+			{
+				source:
+					"export default function value(\n  name: string,\n): string {\n  return name;\n}\n",
+				replacement:
+					"export default function renamed(name: string): string {\n  return name.toUpperCase();\n}",
+			},
+			{
+				source: "export class Value\n  extends Base {\n  run() { return 1; }\n}\n",
+				replacement: "export class Renamed {\n  run() { return 2; }\n}",
+			},
+			{
+				source:
+					"export default class Value\n  extends Base {\n  run() { return 1; }\n}\n",
+				replacement: "export default class Renamed {\n  run() { return 2; }\n}",
+			},
+		];
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+
+		for (const testCase of cases) {
+			spawnCollectMock.mockClear();
+			writeFileSync(file, testCase.source);
+			const result = await tool.execute("1", {
+				f: "app.ts",
+				r: "blitz",
+				ops: [["replace", 1, 1, testCase.replacement]],
+			});
+
+			expect(spawnCollectMock).toHaveBeenCalledTimes(0);
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("pi-blitz route declined");
+			expect(result.details?.status).toBe("declined");
+			expect(result.details?.noWrite).toBe(true);
+			expect(result.details?.selected).toBe("apply_patch");
+			expect(readFileSync(file, "utf8")).toBe(testCase.source);
+		}
+	});
+
 	test("route edit accepts insert_after text alias in mixed same-file ops", async () => {
 		const tool = tools.routeEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {

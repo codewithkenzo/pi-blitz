@@ -1483,6 +1483,14 @@ const readLineRange = (file: string, start: number, end: number): string => {
 	return lines.slice(start - 1, end).join("\n");
 };
 
+const declarationHeaderLinePattern =
+	/^(?:(?:export|default|declare|abstract|async)\s+)*(?:function|class)\b/;
+
+const looksLikeDeclarationHeaderLine = (line: string): boolean => {
+	const trimmed = line.trim();
+	return trimmed.endsWith("{") || declarationHeaderLinePattern.test(trimmed);
+};
+
 const normalizeLineReplacementRange = (
 	file: string,
 	start: number,
@@ -1511,19 +1519,11 @@ const normalizeLineReplacementRange = (
 	) {
 		adjustedEnd = fileLines.length;
 	} else if (start === end && fileLines[start] !== undefined) {
-		const targetLine = fileLines[start - 1]?.trim() ?? "";
-		const targetLooksLikeHeader =
-			targetLine.endsWith("{") ||
-			/^(?:export\s+)?(?:async\s+)?function\b/.test(targetLine) ||
-			/^class\b/.test(targetLine);
-		if (targetLooksLikeHeader) {
+		const targetLine = fileLines[start - 1] ?? "";
+		if (looksLikeDeclarationHeaderLine(targetLine)) {
 			const trimmedReplace = replace.trimStart();
 			const firstReplaceLine = trimmedReplace.split("\n", 1)[0] ?? "";
-			if (
-				firstReplaceLine.trimEnd().endsWith("{") ||
-				/^(?:export\s+)?(?:async\s+)?function\b/.test(trimmedReplace) ||
-				/^class\b/.test(trimmedReplace)
-			) {
+			if (looksLikeDeclarationHeaderLine(firstReplaceLine)) {
 				throw new InvalidParamsError({
 					reason: "ambiguous header/signature line replacement declined",
 				});
