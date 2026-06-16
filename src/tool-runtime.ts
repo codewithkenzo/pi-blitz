@@ -60,6 +60,7 @@ export interface PiBlitzDetails {
 	rollbackAttempted?: boolean;
 	rollbackSucceeded?: boolean;
 	rollbackFiles?: number;
+	rollbackErrors?: string[];
 	failedApplyIndex?: number;
 }
 

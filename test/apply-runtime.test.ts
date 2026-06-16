@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const defaultSpawnCollect = async () => ({
+type SpawnCallOptions = { stdin?: string };
+
+const successResult = () => ({
 	stdout: JSON.stringify({
 		status: "applied",
 		operation: "replace_body_span",
@@ -22,6 +30,42 @@ const defaultSpawnCollect = async () => ({
 	exitCode: 0,
 	durationMs: 10,
 });
+
+const defaultSpawnCollect = async (
+	_cmd: string[] = [],
+	_options: SpawnCallOptions = {},
+) => successResult();
+
+const applyExactOpsFromStdin = (stdin = "") => {
+	const payload = JSON.parse(stdin) as {
+		file?: string;
+		f?: string;
+		ops?: string[][];
+	};
+	const target = payload.file ?? payload.f;
+	if (!target || !payload.ops) return;
+	let content = readFileSync(target, "utf8");
+	for (const op of payload.ops) {
+		if (op[0] !== "x") continue;
+		const oldText = op[1] ?? "";
+		const newText = op[2] ?? "";
+		if (!content.includes(oldText)) {
+			throw new Error(`NO_MATCH ${oldText}`);
+		}
+		content = content.replace(oldText, newText);
+	}
+	writeFileSync(target, content);
+};
+
+const mutatingSpawnCollect = async (
+	cmd: string[] = [],
+	options: SpawnCallOptions = {},
+) => {
+	if (!cmd.includes("--dry-run")) {
+		applyExactOpsFromStdin(options.stdin);
+	}
+	return successResult();
+};
 
 // Mocked spawn runner for this test file only.
 const spawnCollectMock = mock(defaultSpawnCollect);
@@ -228,6 +272,11 @@ describe("pi_blitz_apply runtime path", () => {
 	});
 
 	test("blitz_edit applies same-file multi exact ops with rollback-backed atomic reporting", async () => {
+		writeFileSync(
+			file,
+			"export function foo() {\n  const a = 1;\n  return 1;\n}\n",
+		);
+		spawnCollectMock.mockImplementation(mutatingSpawnCollect);
 		const tool = tools.blitzEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
 			f: "app.ts",
@@ -297,6 +346,9 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(JSON.parse(secondApply[1].stdin).ops).toEqual([
 			["x", "const a = 1;", "const a = 2;"],
 		]);
+		expect(readFileSync(file, "utf8")).toBe(
+			"export function foo() {\n  const a = 2;\n  return 2;\n}\n",
+		);
 	});
 
 	test("blitz_edit surfaces nonzero Blitz JSON stdout errors", async () => {
@@ -353,6 +405,7 @@ describe("pi_blitz_apply runtime path", () => {
 	});
 
 	test("blitz_edit applies cross-file batches with rollback-backed atomic reporting", async () => {
+		spawnCollectMock.mockImplementation(mutatingSpawnCollect);
 		const tool = tools.blitzEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
 			e: [
@@ -387,6 +440,12 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(second[0]).toContain("--dry-run");
 		expect(third[0]).not.toContain("--dry-run");
 		expect(fourth[0]).not.toContain("--dry-run");
+		expect(readFileSync(file, "utf8")).toBe(
+			"export function foo() { return 2; }\n",
+		);
+		expect(readFileSync(join(tmpDir, "other.ts"), "utf8")).toBe(
+			"export function bar() { return 4; }\n",
+		);
 	});
 
 	test("blitz_edit rolls back earlier mutations when a later apply fails", async () => {
@@ -432,6 +491,81 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(readFileSync(file, "utf8")).toBe(beforeApp);
 		expect(readFileSync(join(tmpDir, "other.ts"), "utf8")).toBe(beforeOther);
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("blitz_edit rolls back earlier mutations when a later apply throws", async () => {
+		const beforeApp = readFileSync(file, "utf8");
+		const beforeOther = readFileSync(join(tmpDir, "other.ts"), "utf8");
+		let call = 0;
+		spawnCollectMock.mockImplementation(async () => {
+			call += 1;
+			if (call === 3) {
+				writeFileSync(file, "export function foo() { return 2; }\n");
+				return successResult();
+			}
+			if (call === 4) {
+				throw new Error("simulated timeout after partial mutation");
+			}
+			return successResult();
+		});
+
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			e: [
+				["x", "app.ts", "return 1;", "return 2;"],
+				["x", "other.ts", "return 3;", "return 4;"],
+			],
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("hard-apply-error");
+		expect(result.content[0]?.text).toContain("rollbackAttempted=true");
+		expect(result.content[0]?.text).toContain("rollbackSucceeded=true");
+		expect(result.details?.reason).toBe("hard-apply-error");
+		expect(result.details?.status).toBe("rolled-back");
+		expect(result.details?.rollbackAttempted).toBe(true);
+		expect(result.details?.rollbackSucceeded).toBe(true);
+		expect(result.details?.failedApplyIndex).toBe(1);
+		expect(readFileSync(file, "utf8")).toBe(beforeApp);
+		expect(readFileSync(join(tmpDir, "other.ts"), "utf8")).toBe(beforeOther);
+		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
+	});
+
+	test("blitz_edit reports incomplete rollback truthfully", async () => {
+		let call = 0;
+		spawnCollectMock.mockImplementation(async () => {
+			call += 1;
+			if (call === 3) {
+				writeFileSync(file, "export function foo() { return 2; }\n");
+				chmodSync(file, 0o400);
+				return successResult();
+			}
+			if (call === 4) {
+				throw new Error("simulated later hard failure");
+			}
+			return successResult();
+		});
+
+		try {
+			const tool = tools.blitzEditToolDef("blitz", tmpDir);
+			const result = await tool.execute("1", {
+				e: [
+					["x", "app.ts", "return 1;", "return 2;"],
+					["x", "other.ts", "return 3;", "return 4;"],
+				],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("rollbackAttempted=true");
+			expect(result.content[0]?.text).toContain("rollbackSucceeded=false");
+			expect(result.details?.status).toBe("rollback-incomplete");
+			expect(result.details?.rollbackSucceeded).toBe(false);
+			expect(Array.isArray(result.details?.rollbackErrors)).toBe(true);
+			expect(result.details?.atomicityNote).toContain("rollback was incomplete");
+			expect(result.details?.atomicityNote).not.toContain("restored all touched files");
+		} finally {
+			chmodSync(file, 0o600);
+		}
 	});
 
 	test("invokes blitz apply --edit - --json with JSON IR", async () => {

@@ -1894,11 +1894,55 @@ const restoreSnapshots = async (
 		try {
 			await writeFile(snapshot.path, snapshot.content);
 		} catch (err) {
-			errors.push(`${snapshot.path}: ${err instanceof Error ? err.message : String(err)}`);
+			errors.push(
+				`${snapshot.path}: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	}
 	return { succeeded: errors.length === 0, files: snapshots.length, errors };
 };
+
+const rollbackApplyFailure = async (
+	result: BlitzToolResult,
+	snapshots: readonly FileSnapshot[],
+	failedApplyIndex: number,
+): Promise<BlitzToolResult> => {
+	const rollback = await restoreSnapshots(snapshots);
+	const status = rollback.succeeded ? "rolled-back" : "rollback-incomplete";
+	const rollbackText = `rollbackAttempted=true rollbackSucceeded=${rollback.succeeded} rollbackFiles=${rollback.files}${rollback.errors.length ? ` rollbackErrors=${rollback.errors.join(" | ")}` : ""}`;
+	return {
+		...result,
+		content: [
+			{
+				type: "text" as const,
+				text: `${result.content[0]?.text ?? "pi-blitz blitz-error"}; ${rollbackText}`,
+			},
+		],
+		details: {
+			...result.details,
+			status,
+			atomicityNote: rollback.succeeded
+				? "blitz_edit restored all touched files from pre-apply snapshots after an apply failure; no core/apply_patch fallback used."
+				: "blitz_edit attempted to restore touched files from pre-apply snapshots after an apply failure, but rollback was incomplete; inspect rollbackErrors. No core/apply_patch fallback used.",
+			rollbackAttempted: true,
+			rollbackSucceeded: rollback.succeeded,
+			rollbackFiles: rollback.files,
+			...(rollback.errors.length ? { rollbackErrors: rollback.errors } : {}),
+			failedApplyIndex,
+		},
+	};
+};
+
+const hardApplyFailureResult = (err: unknown): BlitzToolResult => ({
+	content: [
+		{
+			type: "text" as const,
+			text: `pi-blitz hard-apply-error: ${err instanceof Error ? err.message : String(err)}`,
+		},
+	],
+	isError: true,
+	details: { reason: "hard-apply-error" },
+});
 
 export const blitzEditToolDef = (binary: string, cwd: string) =>
 	({
@@ -1974,36 +2018,25 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 
 							const snapshots = await snapshotFiles(absPaths);
 							for (const [idx, job] of safeUnits.entries()) {
-								const applied = await executeCompactOpParams(
-									binary,
-									cwd,
-									{
-										f: absByFile.get(job.f) ?? job.f,
-										ops: job.ops,
-									},
-									{ skipLock: true },
-								);
-								if (applied.isError) {
-									const rollback = await restoreSnapshots(snapshots);
-									return {
-										...applied,
-										content: [
-											{
-												type: "text" as const,
-												text: `${applied.content[0]?.text ?? "pi-blitz blitz-error"}; rollbackAttempted=true rollbackSucceeded=${rollback.succeeded} rollbackFiles=${rollback.files}${rollback.errors.length ? ` rollbackErrors=${rollback.errors.join(" | ")}` : ""}`,
-											},
-										],
-										details: {
-											...applied.details,
-											status: "rolled-back",
-											atomicityNote:
-												"blitz_edit restored all touched files from pre-apply snapshots after an apply failure; no core/apply_patch fallback used.",
-											rollbackAttempted: true,
-											rollbackSucceeded: rollback.succeeded,
-											rollbackFiles: rollback.files,
-											failedApplyIndex: idx,
+								try {
+									const applied = await executeCompactOpParams(
+										binary,
+										cwd,
+										{
+											f: absByFile.get(job.f) ?? job.f,
+											ops: job.ops,
 										},
-									};
+										{ skipLock: true },
+									);
+									if (applied.isError) {
+										return rollbackApplyFailure(applied, snapshots, idx);
+									}
+								} catch (err) {
+									return rollbackApplyFailure(
+										hardApplyFailureResult(err),
+										snapshots,
+										idx,
+									);
 								}
 							}
 
