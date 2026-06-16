@@ -1,6 +1,9 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from "bun:test";
-import piBlitz from "../index.js";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import piBlitz, { resolveBundledBlitzBinary } from "../index.js";
 import {
 	getProfiledToolNames,
 	profileLabel,
@@ -18,17 +21,19 @@ afterEach(() => {
 
 const createFakePi = () => {
 	const registeredToolNames: string[] = [];
+	const registeredTools: Array<{ name: string; execute?: unknown }> = [];
 	const resourceHandlers: Array<() => { skillPaths: string[] }> = [];
 	const pi = {
-		registerTool(tool: { name: string }) {
+		registerTool(tool: { name: string; execute?: unknown }) {
 			registeredToolNames.push(tool.name);
+			registeredTools.push(tool);
 		},
 		on(event: string, handler: () => { skillPaths: string[] }) {
 			if (event === "resources_discover") resourceHandlers.push(handler);
 		},
 	} as Parameters<typeof piBlitz>[0];
 
-	return { pi, registeredToolNames, resourceHandlers };
+	return { pi, registeredToolNames, registeredTools, resourceHandlers };
 };
 
 describe("pi-blitz tool profiles", () => {
@@ -134,6 +139,48 @@ describe("pi-blitz tool profiles", () => {
 
 		expect(registeredToolNames).toEqual(["blitz_edit"]);
 		expect(resourceHandlers).toHaveLength(1);
+	});
+
+	test("bundled Blitz binary resolves from package dependency instead of PATH", () => {
+		const binary = resolveBundledBlitzBinary();
+
+		expect(binary).toContain("@codewithkenzo/blitz");
+		expect(binary).toEndWith("bin/blitz.js");
+		expect(existsSync(binary)).toBe(true);
+	});
+
+	test("registered minimal blitz_edit exact tuple works with bundled Blitz CLI", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-exact-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "app.ts");
+			writeFileSync(
+				file,
+				"export function add(a: number, b: number) {\n  return a + b\n}\n",
+			);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { f: string; e: [["x", string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				f: "app.ts",
+				e: [["x", "return a + b", "return a + b + 1"]],
+			});
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("ok c=1");
+			expect(readFileSync(file, "utf8")).toContain("return a + b + 1");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 
 	test("index registration honors explicit full profile", async () => {
