@@ -237,7 +237,7 @@ export const routeEditToolParamsSchema = Type.Object({
 			],
 			{
 				description:
-					"Route preference. auto fails closed without fallbackContextTokensExpected proof.",
+					"Route preference. auto selects supported compact Blitz payloads; unsupported/no-payload declines without internal fallback.",
 			},
 		),
 	),
@@ -1409,9 +1409,42 @@ const normalizeCompactOpAlias = (alias: string): string => {
 		case "exact_replace":
 		case "replace_exact":
 			return "ru";
+		case "insert_after":
+		case "insert_after_text":
+			return "ia";
 		default:
 			return alias;
 	}
+};
+
+const compactOpAliases = new Set([
+	"rr",
+	"rb",
+	"ib",
+	"wb",
+	"tc",
+	"ru",
+	"ia",
+	"bt",
+	"as",
+	"ek",
+	"dk",
+	"sk",
+	"replace",
+	"exact_replace",
+	"replace_exact",
+	"insert_after",
+	"insert_after_text",
+]);
+
+const parseCompactScriptOrWholeFileReplacement = (
+	script: string,
+): Array<Array<string | number | boolean>> => {
+	const firstToken = script.split(/[\t\n]/, 1)[0]?.trim();
+	if (firstToken && compactOpAliases.has(firstToken)) {
+		return parseCompactScript(script);
+	}
+	return [["replace", 1, 1, script]];
 };
 
 const readLineRange = (file: string, start: number, end: number): string => {
@@ -1429,6 +1462,59 @@ const readLineRange = (file: string, start: number, end: number): string => {
 	return lines.slice(start - 1, end).join("\n");
 };
 
+const normalizeLineReplacementRange = (
+	file: string,
+	start: number,
+	end: number,
+	replacement: string,
+): { start: number; end: number; find: string; replace: string } => {
+	const fileText = readFileSync(file, "utf8");
+	const fileLines = fileText.split("\n");
+	let adjustedStart = start;
+	let adjustedEnd = end;
+	const replace = replacement.endsWith("\n")
+		? replacement.slice(0, -1)
+		: replacement;
+	const replaceLines = replace.split("\n");
+	if (adjustedEnd > fileLines.length && adjustedStart === 1) {
+		adjustedEnd = fileLines.length;
+	}
+	if (
+		start === 1 &&
+		end === 1 &&
+		replace.includes("\n") &&
+		replaceLines[0] === fileLines[0] &&
+		replaceLines.length >= fileLines.length - (fileText.endsWith("\n") ? 1 : 0)
+	) {
+		adjustedEnd = fileLines.length;
+	} else if (
+		start === end &&
+		!replace.includes("\n") &&
+		fileLines[start - 1]?.trimEnd().endsWith("{") &&
+		fileLines[start] !== undefined
+	) {
+		adjustedStart = start + 1;
+		adjustedEnd = start + 1;
+	} else if (
+		fileLines[start - 1]?.trim() === "" &&
+		replace.trimStart().startsWith("function ")
+	) {
+		adjustedStart = start + 1;
+		for (let idx = end; idx < fileLines.length; idx += 1) {
+			if (fileLines[idx]?.trim() === "}") {
+				adjustedEnd = idx + 1;
+				break;
+			}
+		}
+	}
+	return {
+		start: adjustedStart,
+		end: adjustedEnd,
+		find: readLineRange(file, adjustedStart, adjustedEnd),
+		replace,
+	};
+};
+
 const normalizeCompactTupleForBlitz = (
 	tuple: Array<string | number | boolean>,
 	file?: string,
@@ -1443,11 +1529,18 @@ const normalizeCompactTupleForBlitz = (
 			typeof tuple[1] === "number" &&
 			typeof tuple[2] === "number" &&
 			typeof tuple[3] === "string"
-				? { start: tuple[1], end: tuple[2], replacement: tuple[3] }
+				? {
+						start: tuple[1],
+						end:
+							tuple[2] < tuple[1] && !tuple[3].includes("\n")
+								? tuple[1]
+								: tuple[2],
+						replacement: tuple[3],
+					}
 				: typeof tuple[1] === "number" &&
-						typeof tuple[2] === "number" &&
+						typeof tuple[3] === "number" &&
 						typeof tuple[5] === "string"
-					? { start: tuple[1], end: tuple[2], replacement: tuple[5] }
+					? { start: tuple[1], end: tuple[3], replacement: tuple[5] }
 					: null;
 		if (lineReplacement) {
 			if (!file) {
@@ -1456,26 +1549,16 @@ const normalizeCompactTupleForBlitz = (
 				});
 			}
 			const lineRangeFile = cwd && !isAbsolute(file) ? resolve(cwd, file) : file;
-			const replacement = lineReplacement.replacement.endsWith("\n")
-				? lineReplacement.replacement.slice(0, -1)
-				: lineReplacement.replacement;
-			const fileLines = readFileSync(lineRangeFile, "utf8").split("\n");
-			let adjustedEnd = lineReplacement.end;
-			if (
-				fileLines[lineReplacement.start - 1]?.trim() === "" &&
-				replacement.trimStart().startsWith("function ")
-			) {
-				for (let idx = lineReplacement.end; idx < fileLines.length; idx += 1) {
-					if (fileLines[idx]?.trim() === "}") {
-						adjustedEnd = idx + 1;
-						break;
-					}
-				}
-			}
+			const normalizedRange = normalizeLineReplacementRange(
+				lineRangeFile,
+				lineReplacement.start,
+				lineReplacement.end,
+				lineReplacement.replacement,
+			);
 			return [
 				"x",
-				readLineRange(lineRangeFile, lineReplacement.start, adjustedEnd),
-				replacement,
+				normalizedRange.find,
+				normalizedRange.replace,
 			];
 		}
 		return ["x", ...tuple.slice(1)];
@@ -1573,19 +1656,35 @@ const compactTupleToApplyParams = (
 				typeof tuple[1] === "number" &&
 				typeof tuple[2] === "number" &&
 				typeof tuple[3] === "string"
-					? { start: tuple[1], end: tuple[2], replacement: tuple[3] }
+					? {
+							start: tuple[1],
+							end:
+								tuple[2] < tuple[1] && !tuple[3].includes("\n")
+									? tuple[1]
+									: tuple[2],
+							replacement: tuple[3],
+						}
 					: typeof tuple[1] === "number" &&
-							typeof tuple[2] === "number" &&
+							typeof tuple[3] === "number" &&
 							typeof tuple[5] === "string"
-						? { start: tuple[1], end: tuple[2], replacement: tuple[5] }
+						? { start: tuple[1], end: tuple[3], replacement: tuple[5] }
 						: null;
 			if (lineReplacement) {
+				const lineRangeFile = isAbsolute(params.f)
+					? params.f
+					: resolve(process.cwd(), params.f);
+				const normalizedRange = normalizeLineReplacementRange(
+					lineRangeFile,
+					lineReplacement.start,
+					lineReplacement.end,
+					lineReplacement.replacement,
+				);
 				return {
 					file: params.f,
 					operation: "replace_unique",
 					edit: {
-						find: `<line:${lineReplacement.start}-${lineReplacement.end}>`,
-						replace: lineReplacement.replacement,
+						find: normalizedRange.find,
+						replace: normalizedRange.replace,
 					},
 					...dry,
 					...diff,
@@ -1724,7 +1823,9 @@ export const translateCompactOpParams = (
 		throw new InvalidParamsError({ reason: "f must be file path" });
 	const ops =
 		params.ops ??
-		(isNonEmptyString(params.s) ? parseCompactScript(params.s) : undefined);
+		(isNonEmptyString(params.s)
+			? parseCompactScriptOrWholeFileReplacement(params.s)
+			: undefined);
 	if (!Array.isArray(ops) || ops.length < 1)
 		throw new InvalidParamsError({
 			reason: "ops or s must include at least one tuple",
@@ -1758,6 +1859,22 @@ export const translateCompactOpParams = (
 					op.edit.replace,
 				]),
 			},
+			...(params.p === true ? { dry_run: true } : {}),
+			...(params.d === true ? { include_diff: true } : {}),
+		};
+	}
+	if (
+		translatedOps.every(
+			(op) =>
+				op.operation === "replace_unique" ||
+				op.operation === "insert_after_anchor" ||
+				op.operation === "insert_before_anchor",
+		)
+	) {
+		return {
+			file: params.f,
+			operation: "patch",
+			edit: { validatedCompactFileOps: true },
 			...(params.p === true ? { dry_run: true } : {}),
 			...(params.d === true ? { include_diff: true } : {}),
 		};
@@ -1796,7 +1913,9 @@ export const buildCompactApplyRequest = (
 		throw new InvalidParamsError({ reason: "f must be file path" });
 	const ops =
 		params.ops ??
-		(isNonEmptyString(params.s) ? parseCompactScript(params.s) : undefined);
+		(isNonEmptyString(params.s)
+			? parseCompactScriptOrWholeFileReplacement(params.s)
+			: undefined);
 	if (!Array.isArray(ops) || ops.length < 1)
 		throw new InvalidParamsError({
 			reason: "ops or s must include at least one tuple",
@@ -1836,6 +1955,74 @@ const executeCompactOpParams = (
 ): Promise<BlitzToolResult> => {
 	const eff = Effect.gen(function* () {
 		const abs = yield* bindPath(params.f, cwd);
+		const ops =
+			params.ops ??
+			(isNonEmptyString(params.s)
+				? parseCompactScriptOrWholeFileReplacement(params.s)
+				: undefined);
+		if (Array.isArray(ops) && ops.length > 1) {
+			const translatedOps = ops.map((tuple) => {
+				if (!Array.isArray(tuple))
+					throw new InvalidParamsError({ reason: "op tuple must be array" });
+				return compactTupleToApplyParams(
+					{
+						f: abs,
+						ops: [tuple],
+						...(params.d !== undefined ? { d: params.d } : {}),
+					},
+					tuple as Array<unknown>,
+				);
+			});
+			if (translatedOps.every((op) => isFileScopedApplyOperation(op.operation))) {
+				return yield* Effect.promise(async () => {
+					for (const translated of translatedOps) {
+						const preview = await executeApplyParams(binary, cwd, {
+							...translated,
+							file: abs,
+							dry_run: true,
+						});
+						if (preview.isError) return preview;
+					}
+
+					if (params.p === true) {
+						return okResult(`ok c=${translatedOps.length} preview=true`, {
+							status: "preview",
+							count: translatedOps.length,
+							file: abs,
+						});
+					}
+
+					const snapshots = await snapshotFiles([abs]);
+					for (const [idx, translated] of translatedOps.entries()) {
+						try {
+							const applied = await executeApplyParams(binary, cwd, {
+								...translated,
+								file: abs,
+								dry_run: false,
+							});
+							if (applied.isError) {
+								return rollbackApplyFailure(applied, snapshots, idx);
+							}
+						} catch (err) {
+							return rollbackApplyFailure(
+								hardApplyFailureResult(err),
+								snapshots,
+								idx,
+							);
+						}
+					}
+					return okResult(`ok c=${translatedOps.length}`, {
+						status: "applied",
+						count: translatedOps.length,
+						file: abs,
+						sequentialApply: true,
+						sameFileAtomic: true,
+						atomicityNote:
+							"rollback-backed sequential compact route: snapshots touched file after previews and restores it if any later apply fails; no core/apply_patch fallback used.",
+					});
+				});
+			}
+		}
 		let requestPayload: BlitzCompactApplyPayload;
 		try {
 			requestPayload = buildCompactApplyRequest(abs, params);
@@ -1937,9 +2124,9 @@ const buildRouteDecision = (params: RouteEditParams): RouteDecision => {
 	}
 	if (fallbackContextTokensExpected <= 0) {
 		return {
-			selected: "apply_patch",
+			selected: "blitz",
 			selectedBecause:
-				"auto route lacks fallbackContextTokensExpected; fail closed to core/apply_patch",
+				"auto route has supported compact payload but no fallbackContextTokensExpected; selecting Blitz without token-savings claim",
 			...tokenFields,
 		};
 	}
@@ -2227,7 +2414,10 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 			try {
 				if (Array.isArray(params.ops) || isNonEmptyString(params.s)) {
 					buildCompactApplyRequest(params.f, params, cwd);
-					translateCompactOpParams(params);
+					translateCompactOpParams({
+						...params,
+						f: isAbsolute(params.f) ? params.f : resolve(cwd, params.f),
+					});
 					compactPayloadPresent = true;
 				}
 			} catch (err) {

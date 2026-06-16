@@ -634,6 +634,174 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(result.details?.selected).toBe("blitz");
 	});
 
+	test("route edit accepts replace line/column alias as single-line exact op", async () => {
+		writeFileSync(
+			file,
+			'const helper = makeHelper();\n\nfunction smallTarget(name: string): string {\n  return "hi " + name;\n}\n',
+		);
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", 4, 3, '  return "hello " + name.toUpperCase();']],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			[
+				"x",
+				'  return "hi " + name;',
+				'  return "hello " + name.toUpperCase();',
+			],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit accepts replace start/end line-column alias as exact op", async () => {
+		writeFileSync(file, "a\nb\nc\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", 1, 7, 3, 1, "x\ny\nz"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([["x", "a\nb\nc", "x\ny\nz"]]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit maps function header line replace to body line", async () => {
+		writeFileSync(
+			file,
+			'const helper = makeHelper();\n\nfunction smallTarget(name: string): string {\n  return "hi " + name;\n}\n',
+		);
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", 3, 3, '  return "hello " + name.toUpperCase();']],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			[
+				"x",
+				'  return "hi " + name;',
+				'  return "hello " + name.toUpperCase();',
+			],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit maps line one whole-file replacement without prepending", async () => {
+		writeFileSync(file, "export const CONFIG = {\n  logLevel: \"info\",\n};\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", 1, 1, "export const CONFIG = {\n  logLevel: \"debug\",\n};\n"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			[
+				"x",
+				"export const CONFIG = {\n  logLevel: \"info\",\n};\n",
+				"export const CONFIG = {\n  logLevel: \"debug\",\n};",
+			],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit treats non-script s as whole-file replacement", async () => {
+		writeFileSync(file, "export function value() {\n  return 1;\n}\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			s: "export function value() {\n  return 2;\n}",
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			[
+				"x",
+				"export function value() {\n  return 1;\n}\n",
+				"export function value() {\n  return 2;\n}",
+			],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit accepts insert_after text alias in mixed same-file ops", async () => {
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			d: true,
+			ops: [
+				["replace", "return 1;", "return 2;"],
+				["insert_after", "const marker = value;", "\n  const markerUpper = value.toUpperCase();"],
+				["replace", "throw value;", "throw error;"],
+			],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(6);
+		const payloads = spawnCollectMock.mock.calls.map((call) =>
+			JSON.parse((call as unknown as [string[], { stdin: string }])[1].stdin),
+		);
+		expect(payloads.map((payload) => payload.operation)).toEqual([
+			"replace_unique",
+			"insert_after_anchor",
+			"replace_unique",
+			"replace_unique",
+			"insert_after_anchor",
+			"replace_unique",
+		]);
+		expect(payloads[1].edit).toEqual({
+			anchor: "const marker = value;",
+			text: "\n  const markerUpper = value.toUpperCase();",
+		});
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
 	test("route edit declines unsupported compact aliases without calling Blitz", async () => {
 		const tool = tools.routeEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {

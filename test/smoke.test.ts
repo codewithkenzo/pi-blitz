@@ -107,11 +107,10 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(Value.Check(routeEditToolParamsSchema, valid)).toBe(true);
 	});
 
-	test("pi_blitz_route_edit declines without fallback proof in auto mode", async () => {
+	test("pi_blitz_route_edit declines without compact payload in auto mode", async () => {
 		const tool = routeEditToolDef("blitz", process.cwd());
 		const result = await tool.execute("tcid", {
 			f: "src/app.ts",
-			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
 		});
 		expect(result.details?.selected).toBe("apply_patch");
 		expect(result.details?.status).toBe("declined");
@@ -123,10 +122,10 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(result.content[0]?.text).toContain("no-write terminal");
 		expect(result.details?.contextSavingsPct).toBe(0);
 		expect(result.details?.schemaTokensExpected).toBeGreaterThan(0);
-		expect(result.details?.argTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.argTokensExpected).toBe(0);
 		expect(result.details?.outputTokensExpected).toBeGreaterThan(0);
 		expect(result.details?.fallbackContextTokensExpected).toBe(0);
-		expect(result.details?.selectedBecause).toContain("fail closed");
+		expect(result.details?.selectedBecause).toContain("no Blitz ops/s payload");
 	});
 
 	test("pi_blitz_route_edit declines requested core without mutating", async () => {
