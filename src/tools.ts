@@ -1510,29 +1510,32 @@ const normalizeLineReplacementRange = (
 		replaceLines.length >= fileLines.length - (fileText.endsWith("\n") ? 1 : 0)
 	) {
 		adjustedEnd = fileLines.length;
-	} else if (
-		start === end &&
-		fileLines[start - 1]?.trimEnd().endsWith("{") &&
-		fileLines[start] !== undefined
-	) {
-		const trimmedReplace = replace.trimStart();
-		const firstReplaceLine = trimmedReplace.split("\n", 1)[0] ?? "";
-		if (
-			firstReplaceLine.trimEnd().endsWith("{") ||
-			/^(?:export\s+)?(?:async\s+)?function\b/.test(trimmedReplace) ||
-			/^class\b/.test(trimmedReplace)
-		) {
-			throw new InvalidParamsError({
-				reason: "ambiguous header/signature line replacement declined",
-			});
+	} else if (start === end && fileLines[start] !== undefined) {
+		const targetLine = fileLines[start - 1]?.trim() ?? "";
+		const targetLooksLikeHeader =
+			targetLine.endsWith("{") ||
+			/^(?:export\s+)?(?:async\s+)?function\b/.test(targetLine) ||
+			/^class\b/.test(targetLine);
+		if (targetLooksLikeHeader) {
+			const trimmedReplace = replace.trimStart();
+			const firstReplaceLine = trimmedReplace.split("\n", 1)[0] ?? "";
+			if (
+				firstReplaceLine.trimEnd().endsWith("{") ||
+				/^(?:export\s+)?(?:async\s+)?function\b/.test(trimmedReplace) ||
+				/^class\b/.test(trimmedReplace)
+			) {
+				throw new InvalidParamsError({
+					reason: "ambiguous header/signature line replacement declined",
+				});
+			}
+			if (replace.includes("\n")) {
+				throw new InvalidParamsError({
+					reason: "ambiguous multiline header line replacement declined",
+				});
+			}
+			adjustedStart = start + 1;
+			adjustedEnd = start + 1;
 		}
-		if (replace.includes("\n")) {
-			throw new InvalidParamsError({
-				reason: "ambiguous multiline header line replacement declined",
-			});
-		}
-		adjustedStart = start + 1;
-		adjustedEnd = start + 1;
 	} else if (
 		fileLines[start - 1]?.trim() === "" &&
 		replace.trimStart().startsWith("function ")

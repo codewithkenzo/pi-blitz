@@ -837,6 +837,33 @@ describe("pi_blitz_apply runtime path", () => {
 		);
 	});
 
+	test("route edit declines multiline original signature first-line replacement", async () => {
+		const source =
+			"function value(\n  name: string,\n): string {\n  return name;\n}\n";
+		writeFileSync(file, source);
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [
+				[
+					"replace",
+					1,
+					1,
+					"function renamed(name: string): string {\n  return name.toUpperCase();\n}",
+				],
+			],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(0);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("pi-blitz route declined");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(readFileSync(file, "utf8")).toBe(source);
+	});
+
 	test("route edit accepts insert_after text alias in mixed same-file ops", async () => {
 		const tool = tools.routeEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
