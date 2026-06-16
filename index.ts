@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./src/config.js";
 import {
@@ -10,6 +11,15 @@ import {
 } from "./src/tool-profiles.js";
 
 const baseDir = dirname(fileURLToPath(import.meta.url));
+const requireFromExtension = createRequire(import.meta.url);
+
+export const resolveBundledBlitzBinary = (): string => {
+	try {
+		return requireFromExtension.resolve("@codewithkenzo/blitz/bin/blitz.js");
+	} catch {
+		return "blitz";
+	}
+};
 
 type PiBlitzState = {
 	registered: boolean;
@@ -27,7 +37,7 @@ export default async function piBlitz(pi: ExtensionAPI): Promise<void> {
 
 	const cwd = typeof process.cwd === "function" ? process.cwd() : baseDir;
 	const config = loadConfig(cwd);
-	const binary = config.binary ?? "blitz";
+	const binary = config.binary ?? resolveBundledBlitzBinary();
 	const profile = resolvePiBlitzToolProfile(process.env.PI_BLITZ_TOOL_PROFILE);
 
 	for (const tool of getProfiledToolDefs(binary, cwd, profile)) {

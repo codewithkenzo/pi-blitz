@@ -5,7 +5,7 @@
     "": {
       "name": "@codewithkenzo/pi-blitz",
       "dependencies": {
-        "@codewithkenzo/blitz": "0.1.0-alpha.10",
+        "@codewithkenzo/blitz": "0.4.0",
         "@sinclair/typebox": "^0.34.0",
         "effect": "4.0.0-beta.48",
       },
@@ -82,17 +82,17 @@
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 
-    "@codewithkenzo/blitz": ["@codewithkenzo/blitz@0.1.0-alpha.10", "", { "optionalDependencies": { "@codewithkenzo/blitz-darwin-arm64": "0.1.0-alpha.10", "@codewithkenzo/blitz-darwin-x64": "0.1.0-alpha.10", "@codewithkenzo/blitz-linux-arm64-musl": "0.1.0-alpha.10", "@codewithkenzo/blitz-linux-x64-musl": "0.1.0-alpha.10", "@codewithkenzo/blitz-windows-x64": "0.1.0-alpha.10" }, "bin": { "blitz": "bin/blitz.js", "blitz-mcp": "mcp/blitz-mcp.js" } }, "sha512-7bwW87wVWAJtXh6bhuthpyw9arGo16//VtD/TUmv92EqGeUfDsbAmiCKY7KdWvShhfgt7mQHiFoYiHr64aVNXA=="],
+    "@codewithkenzo/blitz": ["@codewithkenzo/blitz@0.4.0", "", { "optionalDependencies": { "@codewithkenzo/blitz-darwin-arm64": "0.4.0", "@codewithkenzo/blitz-darwin-x64": "0.4.0", "@codewithkenzo/blitz-linux-arm64-musl": "0.4.0", "@codewithkenzo/blitz-linux-x64-musl": "0.4.0", "@codewithkenzo/blitz-windows-x64": "0.4.0" }, "bin": { "blitz": "bin/blitz.js", "blitz-mcp": "mcp/blitz-mcp.js" } }, "sha512-1RYy6pXTRw+J9fLM411jttpFqVEc2iaqrEYNSGTs+cPS8QqV43OTLvpRzyj4QPThxIV9SCDeuB5RnC+7Y0lhQA=="],
 
-    "@codewithkenzo/blitz-darwin-arm64": ["@codewithkenzo/blitz-darwin-arm64@0.1.0-alpha.10", "", { "os": "darwin", "cpu": "arm64" }, "sha512-zd/WuIl+2pKOCYULozOC0RmcG4Y8XSqs72W2fQPee4d3E3DCuHu0ahZA+V2s/i6vGxvBypUDXX7IaGn42TYqWA=="],
+    "@codewithkenzo/blitz-darwin-arm64": ["@codewithkenzo/blitz-darwin-arm64@0.4.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-z9O0eEm45I4X54GKmZZRBzJVitT4ktVJPsZySnogkOADNDuLI7l7fTyh7ZhuxbwVgLjUa3eK61RCX0Y+QCRbYw=="],
 
-    "@codewithkenzo/blitz-darwin-x64": ["@codewithkenzo/blitz-darwin-x64@0.1.0-alpha.10", "", { "os": "darwin", "cpu": "x64" }, "sha512-4koSF6rp0K1w8lE+iGf2m8JnRuMdV5+7sgpVPWdH9cQBCE1zQKGRLPMyCmf6d4OJL1NOmLbS6MF/s6Whmi1Egw=="],
+    "@codewithkenzo/blitz-darwin-x64": ["@codewithkenzo/blitz-darwin-x64@0.4.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-D/+jxerOxiANHVpAA12L7iO+DMWnPcVa0TGoywpouWh1xaRrsMKgPFmbRpBgYKE1Ad557xQnpKBP/ggOtjTDTg=="],
 
-    "@codewithkenzo/blitz-linux-arm64-musl": ["@codewithkenzo/blitz-linux-arm64-musl@0.1.0-alpha.10", "", { "os": "linux", "cpu": "arm64" }, "sha512-0WIHLxz2MZKo+5RNDq+fLPARx9YaPZh+HJei+Pfet2TDuBmHFlrP/gRuv1wrhd3hghhMh3ZgmYJzt17nmXLoNQ=="],
+    "@codewithkenzo/blitz-linux-arm64-musl": ["@codewithkenzo/blitz-linux-arm64-musl@0.4.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-3N7VC9/8FGiXczeZUsohpYM30SUpfJ116ygrsUr8DWnvoPdsZ23b4LypyndAvKCmhjd57Av6doVw9oFqNijsGg=="],
 
-    "@codewithkenzo/blitz-linux-x64-musl": ["@codewithkenzo/blitz-linux-x64-musl@0.1.0-alpha.10", "", { "os": "linux", "cpu": "x64" }, "sha512-rYAgOamZ1W7tBxAen9eq7VhAxCqx2+9dzqr8xWKZCDSEGRAwWMELz0ktkna/yf0WX02V3ZLmTrNiW8ots/KuvA=="],
+    "@codewithkenzo/blitz-linux-x64-musl": ["@codewithkenzo/blitz-linux-x64-musl@0.4.0", "", { "os": "linux", "cpu": "x64" }, "sha512-xvwZJ236e+rfurbUpaU2eMWeqidyux2nhp5pUXe4amtDbe9RjOb/XEoE1d3m0XdGVPDi2yghSQsT+bxiJkpTxQ=="],
 
-    "@codewithkenzo/blitz-windows-x64": ["@codewithkenzo/blitz-windows-x64@0.1.0-alpha.10", "", { "os": "win32", "cpu": "x64" }, "sha512-GXbt5rQNpKxRd1XCZIYmJ1j8E2542x8wIuvQyu/bG1VRh3M9c4u69uco7kl5TKjzNZVBWDgaH+3wOqvsPVPu7w=="],
+    "@codewithkenzo/blitz-windows-x64": ["@codewithkenzo/blitz-windows-x64@0.4.0", "", { "os": "win32", "cpu": "x64" }, "sha512-P3/DRUX2HoIngvKA374NUM6CI80eY39o9osilFJBSVNdv5WS7e4oTS0GM2hBH5zEYx8hFDyAZTR6R4e9n30wXg=="],
 
     "@google/genai": ["@google/genai@1.52.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q=="],
 
