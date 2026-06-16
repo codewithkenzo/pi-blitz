@@ -1,6 +1,6 @@
 {
   "name": "@codewithkenzo/pi-blitz",
-  "version": "0.1.0-alpha.10",
+  "version": "0.3.0",
   "description": "Pi extension for Blitz: fast, token-efficient code edits using the Zig Blitz CLI.",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,7 +35,7 @@
     "blitz"
   ],
   "dependencies": {
-    "@codewithkenzo/blitz": "0.1.0-alpha.10",
+    "@codewithkenzo/blitz": "0.3.0",
     "@sinclair/typebox": "^0.34.0",
     "effect": "4.0.0-beta.48"
   },
