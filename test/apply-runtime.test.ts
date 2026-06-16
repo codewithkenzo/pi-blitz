@@ -568,6 +568,72 @@ describe("pi_blitz_apply runtime path", () => {
 		}
 	});
 
+	test("route edit accepts replace exact alias and sends normalized Blitz op", async () => {
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", "return 1;", "return 2;"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(firstCall[0]).toContain("--dry-run");
+		expect(secondCall[0]).not.toContain("--dry-run");
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			["x", "return 1;", "return 2;"],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+		expect(result.details?.tool).toBe("pi_blitz_op");
+		expect(result.details?.selectedBecause).toContain("requested blitz");
+	});
+
+	test("route edit accepts replace line-range alias as exact old/new op", async () => {
+		writeFileSync(
+			file,
+			"const before = true;\nfunction smallTarget() {\n  return 1;\n}\nconst after = true;\n",
+		);
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", 2, 4, "function smallTarget() {\n  return 2;\n}"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const firstCall = spawnCollectMock.mock.calls[0] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		const secondCall = spawnCollectMock.mock.calls[1] as unknown as [
+			string[],
+			{ stdin: string },
+		];
+		expect(firstCall[0]).toContain("--dry-run");
+		expect(secondCall[0]).not.toContain("--dry-run");
+		expect(JSON.parse(secondCall[1].stdin).ops).toEqual([
+			[
+				"x",
+				"function smallTarget() {\n  return 1;\n}",
+				"function smallTarget() {\n  return 2;\n}",
+			],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
 	test("route edit declines unsupported compact aliases without calling Blitz", async () => {
 		const tool = tools.routeEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
@@ -575,7 +641,7 @@ describe("pi_blitz_apply runtime path", () => {
 			r: "blitz",
 			p: true,
 			d: true,
-			ops: [["replace", "return 1;", "return 1;"]],
+			ops: [["rewrite_everything", "return 1;", "return 1;"]],
 		});
 
 		expect(spawnCollectMock).toHaveBeenCalledTimes(0);

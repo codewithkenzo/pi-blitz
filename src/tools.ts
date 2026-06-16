@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { Effect } from "effect";
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import { spawnCollectNode } from "./spawn.js";
 import { canonicalize } from "./paths.js";
 import { runTool, type BlitzToolResult } from "./tool-runtime.js";
@@ -1401,15 +1403,96 @@ const translateInsertAnchorTuple = (
 	};
 };
 
+const normalizeCompactOpAlias = (alias: string): string => {
+	switch (alias) {
+		case "replace":
+		case "exact_replace":
+		case "replace_exact":
+			return "ru";
+		default:
+			return alias;
+	}
+};
+
+const readLineRange = (file: string, start: number, end: number): string => {
+	if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+		throw new InvalidParamsError({
+			reason: "replace line range must use 1-based start/end numbers",
+		});
+	}
+	const lines = readFileSync(file, "utf8").split("\n");
+	if (end > lines.length) {
+		throw new InvalidParamsError({
+			reason: "replace line range exceeds file length",
+		});
+	}
+	return lines.slice(start - 1, end).join("\n");
+};
+
+const normalizeCompactTupleForBlitz = (
+	tuple: Array<string | number | boolean>,
+	file?: string,
+	cwd?: string,
+): Array<string | number | boolean> => {
+	const alias = tuple[0];
+	if (typeof alias !== "string") return tuple;
+	const normalized = normalizeCompactOpAlias(alias);
+	const isNaturalReplaceAlias = normalized === "ru" && alias !== "ru";
+	if (isNaturalReplaceAlias) {
+		const lineReplacement =
+			typeof tuple[1] === "number" &&
+			typeof tuple[2] === "number" &&
+			typeof tuple[3] === "string"
+				? { start: tuple[1], end: tuple[2], replacement: tuple[3] }
+				: typeof tuple[1] === "number" &&
+						typeof tuple[2] === "number" &&
+						typeof tuple[5] === "string"
+					? { start: tuple[1], end: tuple[2], replacement: tuple[5] }
+					: null;
+		if (lineReplacement) {
+			if (!file) {
+				throw new InvalidParamsError({
+					reason: "replace line range requires file path",
+				});
+			}
+			const lineRangeFile = cwd && !isAbsolute(file) ? resolve(cwd, file) : file;
+			const replacement = lineReplacement.replacement.endsWith("\n")
+				? lineReplacement.replacement.slice(0, -1)
+				: lineReplacement.replacement;
+			const fileLines = readFileSync(lineRangeFile, "utf8").split("\n");
+			let adjustedEnd = lineReplacement.end;
+			if (
+				fileLines[lineReplacement.start - 1]?.trim() === "" &&
+				replacement.trimStart().startsWith("function ")
+			) {
+				for (let idx = lineReplacement.end; idx < fileLines.length; idx += 1) {
+					if (fileLines[idx]?.trim() === "}") {
+						adjustedEnd = idx + 1;
+						break;
+					}
+				}
+			}
+			return [
+				"x",
+				readLineRange(lineRangeFile, lineReplacement.start, adjustedEnd),
+				replacement,
+			];
+		}
+		return ["x", ...tuple.slice(1)];
+	}
+	return normalized === alias ? tuple : [normalized, ...tuple.slice(1)];
+};
+
 const compactTupleToApplyParams = (
 	params: CompactOpParams,
 	tuple: Array<unknown>,
 ): BlitzApplyParams => {
-	const alias = tuple[0];
-	if (!isNonEmptyString(alias))
+	const rawAlias = tuple[0];
+	if (!isNonEmptyString(rawAlias))
 		throw new InvalidParamsError({
 			reason: "op alias must be non-empty string",
 		});
+	const alias = normalizeCompactOpAlias(rawAlias);
 	const dry = params.p === true ? { dry_run: true } : {};
 	const diff = params.d === true ? { include_diff: true } : {};
 	switch (alias) {
@@ -1485,7 +1568,29 @@ const compactTupleToApplyParams = (
 				...dry,
 				...diff,
 			};
-		case "ru":
+		case "ru": {
+			const lineReplacement =
+				typeof tuple[1] === "number" &&
+				typeof tuple[2] === "number" &&
+				typeof tuple[3] === "string"
+					? { start: tuple[1], end: tuple[2], replacement: tuple[3] }
+					: typeof tuple[1] === "number" &&
+							typeof tuple[2] === "number" &&
+							typeof tuple[5] === "string"
+						? { start: tuple[1], end: tuple[2], replacement: tuple[5] }
+						: null;
+			if (lineReplacement) {
+				return {
+					file: params.f,
+					operation: "replace_unique",
+					edit: {
+						find: `<line:${lineReplacement.start}-${lineReplacement.end}>`,
+						replace: lineReplacement.replacement,
+					},
+					...dry,
+					...diff,
+				};
+			}
 			return {
 				file: params.f,
 				operation: "replace_unique",
@@ -1496,6 +1601,7 @@ const compactTupleToApplyParams = (
 				...dry,
 				...diff,
 			};
+		}
 		case "ia":
 			return translateInsertAnchorTuple(params, tuple, dry, diff);
 		case "bt":
@@ -1628,10 +1734,10 @@ export const translateCompactOpParams = (
 			{ ...params, ops },
 			ops[0] as Array<unknown>,
 		);
-	const edits = ops.map((tuple) => {
+	const translatedOps = ops.map((tuple) => {
 		if (!Array.isArray(tuple))
 			throw new InvalidParamsError({ reason: "op tuple must be array" });
-		const translated = compactTupleToApplyParams(
+		return compactTupleToApplyParams(
 			{
 				f: params.f,
 				ops: [tuple],
@@ -1640,6 +1746,23 @@ export const translateCompactOpParams = (
 			},
 			tuple as Array<unknown>,
 		);
+	});
+	if (translatedOps.every((op) => op.operation === "replace_unique")) {
+		return {
+			file: params.f,
+			operation: "patch",
+			edit: {
+				ops: translatedOps.map((op) => [
+					"replace_unique",
+					op.edit.find,
+					op.edit.replace,
+				]),
+			},
+			...(params.p === true ? { dry_run: true } : {}),
+			...(params.d === true ? { include_diff: true } : {}),
+		};
+	}
+	const edits = translatedOps.map((translated) => {
 		if (
 			translated.operation !== "replace_body_span" &&
 			translated.operation !== "insert_body_span" &&
@@ -1667,6 +1790,7 @@ export const translateCompactOpParams = (
 export const buildCompactApplyRequest = (
 	abs: string,
 	params: CompactOpParams,
+	cwdForRelativeReads?: string,
 ): BlitzCompactApplyPayload => {
 	if (!isNonEmptyString(params.f))
 		throw new InvalidParamsError({ reason: "f must be file path" });
@@ -1683,7 +1807,7 @@ export const buildCompactApplyRequest = (
 		ops: ops.map((tuple) => {
 			if (!Array.isArray(tuple))
 				throw new InvalidParamsError({ reason: "op tuple must be array" });
-			return tuple.map((item) => {
+			const normalizedTuple = tuple.map((item) => {
 				if (
 					typeof item !== "string" &&
 					typeof item !== "number" &&
@@ -1695,6 +1819,11 @@ export const buildCompactApplyRequest = (
 				}
 				return item;
 			});
+			return normalizeCompactTupleForBlitz(
+				normalizedTuple,
+				abs,
+				cwdForRelativeReads,
+			);
 		}),
 	};
 };
@@ -2097,7 +2226,7 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 			let compactPayloadPresent = false;
 			try {
 				if (Array.isArray(params.ops) || isNonEmptyString(params.s)) {
-					buildCompactApplyRequest(params.f, params);
+					buildCompactApplyRequest(params.f, params, cwd);
 					translateCompactOpParams(params);
 					compactPayloadPresent = true;
 				}
@@ -2119,7 +2248,22 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 			if (decision.selected !== "blitz" || !compactPayloadPresent)
 				return routeDeclineResult(decision, params.f);
 
-			const result = await executeCompactOpParams(binary, cwd, params);
+			if (params.p === true) {
+				const preview = await executeCompactOpParams(binary, cwd, params);
+				if (preview.isError === true) {
+					return routeDeclineResult(
+						{
+							...decision,
+							selected: "apply_patch",
+							selectedBecause: `Blitz route payload produced no-write error and was declined safely: ${preview.details?.reason ?? "blitz-error"}; no internal core/apply_patch fallback`,
+						},
+						params.f,
+					);
+				}
+			}
+			const applyParams =
+				params.p === true ? ({ ...params, p: false } satisfies RouteEditParams) : params;
+			const result = await executeCompactOpParams(binary, cwd, applyParams);
 			if (result.isError === true) {
 				return routeDeclineResult(
 					{

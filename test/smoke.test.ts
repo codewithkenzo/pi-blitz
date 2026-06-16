@@ -251,6 +251,20 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			dry_run: true,
 		});
 		expect(
+			translateCompactOpParams({ f, ops: [["replace", "old", "new"]] }),
+		).toEqual({
+			file: f,
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["exact_replace", "old", "new"]] }),
+		).toEqual({
+			file: f,
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+		});
+		expect(
 			translateCompactOpParams({
 				f,
 				ops: [["ia", "anchor", "text", "before"]],
