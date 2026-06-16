@@ -1439,10 +1439,31 @@ const compactOpAliases = new Set([
 
 const parseCompactScriptOrWholeFileReplacement = (
 	script: string,
+	file?: string,
 ): Array<Array<string | number | boolean>> => {
 	const firstToken = script.split(/[\t\n]/, 1)[0]?.trim();
 	if (firstToken && compactOpAliases.has(firstToken)) {
 		return parseCompactScript(script);
+	}
+	if (!file) {
+		throw new InvalidParamsError({
+			reason: "non-script s requires file for whole-file guard",
+		});
+	}
+	const current = readFileSync(file, "utf8");
+	const currentLines = current.endsWith("\n")
+		? current.slice(0, -1).split("\n")
+		: current.split("\n");
+	const replacement = script.endsWith("\n") ? script.slice(0, -1) : script;
+	const replacementLines = replacement.split("\n");
+	if (
+		replacementLines.length < currentLines.length ||
+		replacementLines[0] !== currentLines[0]
+	) {
+		throw new InvalidParamsError({
+			reason:
+				"non-script s must be verified whole-file replacement with matching first line",
+		});
 	}
 	return [["replace", 1, 1, script]];
 };
@@ -1472,16 +1493,18 @@ const normalizeLineReplacementRange = (
 	const fileLines = fileText.split("\n");
 	let adjustedStart = start;
 	let adjustedEnd = end;
-	const replace = replacement.endsWith("\n")
-		? replacement.slice(0, -1)
-		: replacement;
+	const preserveWholeFileTrailingNewline =
+		start === 1 && end === 1 && replacement.includes("\n");
+	const replace =
+		!preserveWholeFileTrailingNewline && replacement.endsWith("\n")
+			? replacement.slice(0, -1)
+			: replacement;
 	const replaceLines = replace.split("\n");
 	if (adjustedEnd > fileLines.length && adjustedStart === 1) {
 		adjustedEnd = fileLines.length;
 	}
 	if (
 		start === 1 &&
-		end === 1 &&
 		replace.includes("\n") &&
 		replaceLines[0] === fileLines[0] &&
 		replaceLines.length >= fileLines.length - (fileText.endsWith("\n") ? 1 : 0)
@@ -1493,6 +1516,16 @@ const normalizeLineReplacementRange = (
 		fileLines[start - 1]?.trimEnd().endsWith("{") &&
 		fileLines[start] !== undefined
 	) {
+		const trimmedReplace = replace.trimStart();
+		if (
+			trimmedReplace.endsWith("{") ||
+			/^(?:export\s+)?(?:async\s+)?function\b/.test(trimmedReplace) ||
+			/^class\b/.test(trimmedReplace)
+		) {
+			throw new InvalidParamsError({
+				reason: "ambiguous header/signature line replacement declined",
+			});
+		}
 		adjustedStart = start + 1;
 		adjustedEnd = start + 1;
 	} else if (
@@ -1824,7 +1857,10 @@ export const translateCompactOpParams = (
 	const ops =
 		params.ops ??
 		(isNonEmptyString(params.s)
-			? parseCompactScriptOrWholeFileReplacement(params.s)
+			? parseCompactScriptOrWholeFileReplacement(
+				params.s,
+				isAbsolute(params.f) ? params.f : resolve(process.cwd(), params.f),
+			)
 			: undefined);
 	if (!Array.isArray(ops) || ops.length < 1)
 		throw new InvalidParamsError({
@@ -1914,7 +1950,7 @@ export const buildCompactApplyRequest = (
 	const ops =
 		params.ops ??
 		(isNonEmptyString(params.s)
-			? parseCompactScriptOrWholeFileReplacement(params.s)
+			? parseCompactScriptOrWholeFileReplacement(params.s, abs)
 			: undefined);
 	if (!Array.isArray(ops) || ops.length < 1)
 		throw new InvalidParamsError({
@@ -1958,7 +1994,7 @@ const executeCompactOpParams = (
 		const ops =
 			params.ops ??
 			(isNonEmptyString(params.s)
-				? parseCompactScriptOrWholeFileReplacement(params.s)
+				? parseCompactScriptOrWholeFileReplacement(params.s, abs)
 				: undefined);
 		if (Array.isArray(ops) && ops.length > 1) {
 			const translatedOps = ops.map((tuple) => {
@@ -2413,10 +2449,11 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 			let compactPayloadPresent = false;
 			try {
 				if (Array.isArray(params.ops) || isNonEmptyString(params.s)) {
-					buildCompactApplyRequest(params.f, params, cwd);
+					const abs = isAbsolute(params.f) ? params.f : resolve(cwd, params.f);
+					buildCompactApplyRequest(abs, params, cwd);
 					translateCompactOpParams({
 						...params,
-						f: isAbsolute(params.f) ? params.f : resolve(cwd, params.f),
+						f: abs,
 					});
 					compactPayloadPresent = true;
 				}
