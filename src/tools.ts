@@ -1512,18 +1512,23 @@ const normalizeLineReplacementRange = (
 		adjustedEnd = fileLines.length;
 	} else if (
 		start === end &&
-		!replace.includes("\n") &&
 		fileLines[start - 1]?.trimEnd().endsWith("{") &&
 		fileLines[start] !== undefined
 	) {
 		const trimmedReplace = replace.trimStart();
+		const firstReplaceLine = trimmedReplace.split("\n", 1)[0] ?? "";
 		if (
-			trimmedReplace.endsWith("{") ||
+			firstReplaceLine.trimEnd().endsWith("{") ||
 			/^(?:export\s+)?(?:async\s+)?function\b/.test(trimmedReplace) ||
 			/^class\b/.test(trimmedReplace)
 		) {
 			throw new InvalidParamsError({
 				reason: "ambiguous header/signature line replacement declined",
+			});
+		}
+		if (replace.includes("\n")) {
+			throw new InvalidParamsError({
+				reason: "ambiguous multiline header line replacement declined",
 			});
 		}
 		adjustedStart = start + 1;
