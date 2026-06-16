@@ -568,6 +568,68 @@ describe("pi_blitz_apply runtime path", () => {
 		}
 	});
 
+	test("route edit declines unsupported compact aliases without calling Blitz", async () => {
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			p: true,
+			d: true,
+			ops: [["replace", "return 1;", "return 1;"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(0);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("pi-blitz route declined");
+		expect(result.content[0]?.text).toContain("no-write terminal");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.tool).toBe("pi_blitz_route_edit");
+		expect(result.details?.selectedBecause).toContain(
+			"unsupported Blitz route payload declined without writes",
+		);
+		expect(result.details?.selectedBecause).toContain(
+			"no internal core/apply_patch fallback",
+		);
+		expect(readFileSync(file, "utf8")).toBe(
+			"export function foo() { return 1; }\n",
+		);
+	});
+
+	test("route edit converts Blitz unsupported-operation soft errors to safe no-write decline", async () => {
+		spawnCollectMock.mockImplementationOnce(async () => ({
+			stdout: JSON.stringify({ code: "UNSUPPORTED_OPERATION" }),
+			stderr: "",
+			exitCode: 1,
+			durationMs: 10,
+		}));
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			d: true,
+			ops: [["ru", "missing", "replacement"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("pi-blitz route declined");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.tool).toBe("pi_blitz_route_edit");
+		expect(result.details?.selectedBecause).toContain(
+			"Blitz route payload produced no-write error and was declined safely",
+		);
+		expect(result.details?.selectedBecause).toContain(
+			"no internal core/apply_patch fallback",
+		);
+		expect(readFileSync(file, "utf8")).toBe(
+			"export function foo() { return 1; }\n",
+		);
+	});
+
 	test("invokes blitz apply --edit - --json with JSON IR", async () => {
 		const tool = tools.piBlitzApplyToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {

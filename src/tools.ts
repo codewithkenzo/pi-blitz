@@ -2091,10 +2091,14 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 			_tcid: string,
 			params: RouteEditParams,
 		): Promise<BlitzToolResult> => {
+			if (params.r === "core" || params.r === "apply_patch") {
+				return routeDeclineResult(buildRouteDecision(params), params.f);
+			}
 			let compactPayloadPresent = false;
 			try {
 				if (Array.isArray(params.ops) || isNonEmptyString(params.s)) {
 					buildCompactApplyRequest(params.f, params);
+					translateCompactOpParams(params);
 					compactPayloadPresent = true;
 				}
 			} catch (err) {
@@ -2103,7 +2107,7 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 					return routeDeclineResult(
 						{
 							...decision,
-							selectedBecause: `${err.reason}; use core/apply_patch or fix Blitz tuple`,
+							selectedBecause: `unsupported Blitz route payload declined without writes: ${err.reason}; no internal core/apply_patch fallback`,
 						},
 						params.f,
 					);
@@ -2116,6 +2120,16 @@ export const routeEditToolDef = (binary: string, cwd: string) =>
 				return routeDeclineResult(decision, params.f);
 
 			const result = await executeCompactOpParams(binary, cwd, params);
+			if (result.isError === true) {
+				return routeDeclineResult(
+					{
+						...decision,
+						selected: "apply_patch",
+						selectedBecause: `Blitz route payload produced no-write error and was declined safely: ${result.details?.reason ?? "blitz-error"}; no internal core/apply_patch fallback`,
+					},
+					params.f,
+				);
+			}
 			return {
 				...result,
 				details: {
