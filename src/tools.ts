@@ -1878,7 +1878,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}. Exact replacement: prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. Structural: [rb|ia,file,kind,name,text].",
+			"Blitz edit. Args {f?,e}; e must be an array of tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. rb replaces symbol body only. ia inserts after symbol declaration only, not text anchors. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
