@@ -936,6 +936,174 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(result.details?.selected).toBe("blitz");
 	});
 
+	test("route edit normalizes provider literal tab compact script", async () => {
+		writeFileSync(file, "function value() {\n  return 1;\n}\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			s: "replace<TAB>return 1;<TAB>return 2;",
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(
+			(spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }])[1]
+				.stdin,
+		);
+		expect(payload.ops).toEqual([["x", "return 1;", "return 2;"]]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit normalizes uniquely quoted provider exact replacements", async () => {
+		writeFileSync(file, "<title>Blitz App</title>\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["replace", "\"Blitz App\"", "\"Blitz CLI\""]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(
+			(spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }])[1]
+				.stdin,
+		);
+		expect(payload.ops).toEqual([["x", "Blitz App", "Blitz CLI"]]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit declines ambiguous quoted provider exact replacements", async () => {
+		writeFileSync(file, "<h1>Blitz App</h1>\n<title>Blitz App</title>\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["replace", "\"Blitz App\"", "\"Blitz CLI\""]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(0);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("pi-blitz route declined");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(readFileSync(file, "utf8")).toBe(
+			"<h1>Blitz App</h1>\n<title>Blitz App</title>\n",
+		);
+	});
+
+	test("route edit infers indentation for unique insert_after provider text", async () => {
+		writeFileSync(file, "export function emit(value: string): string {\n  const marker = value;\n  return marker;\n}\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["insert_after", "const marker = value;", "const markerUpper = value.toUpperCase();"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(
+			(spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }])[1]
+				.stdin,
+		);
+		expect(payload.ops).toEqual([
+			["ia", "const marker = value;", "\n  const markerUpper = value.toUpperCase();"],
+		]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit normalizes provider slash key replacements", async () => {
+		writeFileSync(file, "export const CONFIG = {\n  logLevel: \"info\",\n};\n<title>Blitz App</title>\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const first = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["/logLevel", "info", "debug"]],
+		});
+		const second = await tool.execute("2", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["/title", "Blitz App", "Blitz CLI"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(2);
+		const payloads = spawnCollectMock.mock.calls.map((call) =>
+			JSON.parse((call as unknown as [string[], { stdin: string }])[1].stdin),
+		);
+		expect(payloads[0].ops).toEqual([[
+			"x",
+			"\n  logLevel: \"info\"",
+			"\n  logLevel: \"debug\"",
+		]]);
+		expect(payloads[1].ops).toEqual([[
+			"x",
+			"<title>Blitz App</title>",
+			"<title>Blitz CLI</title>",
+		]]);
+		expect(first.details?.selected).toBe("blitz");
+		expect(second.details?.selected).toBe("blitz");
+	});
+
+	test("route edit accepts provider repl exact alias", async () => {
+		writeFileSync(file, "export function adjust() {\n  return base;\n}\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["repl", "  return base;", "  return base + 1;"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(
+			(spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }])[1]
+				.stdin,
+		);
+		expect(payload.ops).toEqual([["x", "  return base;", "  return base + 1;"]]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit normalizes provider d1 exact replacement", async () => {
+		writeFileSync(file, "export function adjust() {\n  return base;\n}\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["d1", 2, "return base;", "return base + 1;"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
+		const payload = JSON.parse(
+			(spawnCollectMock.mock.calls[0] as unknown as [string[], { stdin: string }])[1]
+				.stdin,
+		);
+		expect(payload.ops).toEqual([["x", "return base;", "return base + 1;"]]);
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.selected).toBe("blitz");
+	});
+
+	test("route edit declines provider key-only exact replacements", async () => {
+		writeFileSync(file, "export const CONFIG = {\n  logLevel: \"debug\",\n};\n");
+		const tool = tools.routeEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			f: "app.ts",
+			r: "blitz",
+			ops: [["replace", "logLevel", "debug"]],
+		});
+
+		expect(spawnCollectMock).toHaveBeenCalledTimes(0);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("pi-blitz route declined");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.noWrite).toBe(true);
+		expect(readFileSync(file, "utf8")).toBe(
+			"export const CONFIG = {\n  logLevel: \"debug\",\n};\n",
+		);
+	});
+
 	test("route edit declines unsupported compact aliases without calling Blitz", async () => {
 		const tool = tools.routeEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {

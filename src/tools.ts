@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { Effect } from "effect";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { spawnCollectNode } from "./spawn.js";
@@ -1393,11 +1393,16 @@ const translateInsertAnchorTuple = (
 	const text = positionFirst
 		? needString(tuple[3], "ia text")
 		: needString(tuple[2], "ia text");
+	const normalizedInsert = normalizeInsertAnchorText(
+		isAbsolute(params.f) ? params.f : resolve(process.cwd(), params.f),
+		anchor,
+		text,
+	);
 	return {
 		file: params.f,
 		operation:
 			position === "before" ? "insert_before_anchor" : "insert_after_anchor",
-		edit: { anchor, text },
+		edit: { anchor: normalizedInsert.anchor, text: normalizedInsert.text },
 		...dry,
 		...diff,
 	};
@@ -1408,6 +1413,7 @@ const normalizeCompactOpAlias = (alias: string): string => {
 		case "replace":
 		case "exact_replace":
 		case "replace_exact":
+		case "repl":
 			return "ru";
 		case "insert_after":
 		case "insert_after_text":
@@ -1433,17 +1439,24 @@ const compactOpAliases = new Set([
 	"replace",
 	"exact_replace",
 	"replace_exact",
+	"repl",
 	"insert_after",
 	"insert_after_text",
 ]);
+
+const normalizeProviderCompactScript = (script: string): string =>
+	script.includes("<TAB>") && !script.includes("\t")
+		? script.replaceAll("<TAB>", "\t")
+		: script;
 
 const parseCompactScriptOrWholeFileReplacement = (
 	script: string,
 	file?: string,
 ): Array<Array<string | number | boolean>> => {
-	const firstToken = script.split(/[\t\n]/, 1)[0]?.trim();
+	const normalizedScript = normalizeProviderCompactScript(script);
+	const firstToken = normalizedScript.split(/[\t\n]/, 1)[0]?.trim();
 	if (firstToken && compactOpAliases.has(firstToken)) {
-		return parseCompactScript(script);
+		return parseCompactScript(normalizedScript);
 	}
 	if (!file) {
 		throw new InvalidParamsError({
@@ -1454,7 +1467,9 @@ const parseCompactScriptOrWholeFileReplacement = (
 	const currentLines = current.endsWith("\n")
 		? current.slice(0, -1).split("\n")
 		: current.split("\n");
-	const replacement = script.endsWith("\n") ? script.slice(0, -1) : script;
+	const replacement = normalizedScript.endsWith("\n")
+		? normalizedScript.slice(0, -1)
+		: normalizedScript;
 	const replacementLines = replacement.split("\n");
 	if (
 		replacementLines.length < currentLines.length ||
@@ -1465,7 +1480,103 @@ const parseCompactScriptOrWholeFileReplacement = (
 				"non-script s must be verified whole-file replacement with matching first line",
 		});
 	}
-	return [["replace", 1, 1, script]];
+	return [["replace", 1, 1, normalizedScript]];
+};
+
+const countOccurrences = (haystack: string, needle: string): number => {
+	if (needle.length < 1) return 0;
+	let count = 0;
+	let index = 0;
+	while ((index = haystack.indexOf(needle, index)) !== -1) {
+		count += 1;
+		index += needle.length;
+	}
+	return count;
+};
+
+const stripMatchingQuotes = (value: string): string | undefined => {
+	if (value.length < 2) return undefined;
+	const first = value[0];
+	const last = value[value.length - 1];
+	return (first === last && (first === '"' || first === "'" || first === "`"))
+		? value.slice(1, -1)
+		: undefined;
+};
+
+const normalizeUniqueFindReplace = (
+	file: string | undefined,
+	find: string,
+	replace: string,
+): { find: string; replace: string } => {
+	if (!file || !existsSync(file)) return { find, replace };
+	const text = readFileSync(file, "utf8");
+	if (/^[A-Za-z_$][\w$]*$/.test(find) && countOccurrences(text, `${find}:`) > 0) {
+		throw new InvalidParamsError({
+			reason: "key-only provider exact replacement is ambiguous without value",
+		});
+	}
+	if (countOccurrences(text, find) === 1) return { find, replace };
+	const unquotedFind = stripMatchingQuotes(find);
+	const unquotedReplace = stripMatchingQuotes(replace);
+	if (unquotedFind !== undefined && unquotedReplace !== undefined) {
+		const quotedMatches = countOccurrences(text, find);
+		const unquotedMatches = countOccurrences(text, unquotedFind);
+		if (quotedMatches === 0 && unquotedMatches > 1) {
+			throw new InvalidParamsError({
+				reason: "quoted provider exact replacement is ambiguous without quotes",
+			});
+		}
+		if (
+			quotedMatches === 0 &&
+			unquotedMatches === 1 &&
+			countOccurrences(text, unquotedReplace) === 0
+		) {
+			return { find: unquotedFind, replace: unquotedReplace };
+		}
+	}
+	return { find, replace };
+};
+
+const normalizeSlashKeyReplacement = (
+	file: string | undefined,
+	key: string,
+	oldValue: string,
+	newValue: string,
+): { find: string; replace: string } | undefined => {
+	if (!file || !existsSync(file) || key.length < 1) return undefined;
+	const text = readFileSync(file, "utf8");
+	const htmlFind = `<${key}>${oldValue}</${key}>`;
+	if (countOccurrences(text, htmlFind) === 1) {
+		return { find: htmlFind, replace: `<${key}>${newValue}</${key}>` };
+	}
+	const quotedKeyPattern = new RegExp(
+		`(^|\\n)(\\s*)${key.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}:\\s*[\"']${oldValue.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}[\"']`,
+		"g",
+	);
+	const matches = [...text.matchAll(quotedKeyPattern)];
+	if (matches.length === 1) {
+		const match = matches[0]?.[0] ?? "";
+		const linePrefix = matches[0]?.[1] ?? "";
+		const indent = matches[0]?.[2] ?? "";
+		return {
+			find: match,
+			replace: `${linePrefix}${indent}${key}: "${newValue}"`,
+		};
+	}
+	return undefined;
+};
+
+const normalizeInsertAnchorText = (
+	file: string | undefined,
+	anchor: string,
+	text: string,
+): { anchor: string; text: string } => {
+	if (!file || !existsSync(file) || text.includes("\n")) return { anchor, text };
+	const fileText = readFileSync(file, "utf8");
+	if (countOccurrences(fileText, anchor) !== 1) return { anchor, text };
+	const anchorLine = fileText.split("\n").find((line) => line.includes(anchor));
+	const indent = anchorLine?.match(/^(\s*)/)?.[1] ?? "";
+	return { anchor, text: `\n${indent}${text}` };
 };
 
 const readLineRange = (file: string, start: number, end: number): string => {
@@ -1563,6 +1674,19 @@ const normalizeCompactTupleForBlitz = (
 ): Array<string | number | boolean> => {
 	const alias = tuple[0];
 	if (typeof alias !== "string") return tuple;
+	if (alias.startsWith("/") && typeof tuple[1] === "string" && typeof tuple[2] === "string") {
+		const exactFile = cwd && file && !isAbsolute(file) ? resolve(cwd, file) : file;
+		const slash = normalizeSlashKeyReplacement(
+			exactFile,
+			alias.slice(1),
+			tuple[1],
+			tuple[2],
+		);
+		if (slash) return ["x", slash.find, slash.replace];
+	}
+	if (alias === "d1" && typeof tuple[2] === "string" && typeof tuple[3] === "string") {
+		return ["x", tuple[2], tuple[3]];
+	}
 	const normalized = normalizeCompactOpAlias(alias);
 	const isNaturalReplaceAlias = normalized === "ru" && alias !== "ru";
 	if (isNaturalReplaceAlias) {
@@ -1602,7 +1726,21 @@ const normalizeCompactTupleForBlitz = (
 				normalizedRange.replace,
 			];
 		}
+		if (typeof tuple[1] === "string" && typeof tuple[2] === "string") {
+			const exactFile = cwd && file && !isAbsolute(file) ? resolve(cwd, file) : file;
+			const normalizedExact = normalizeUniqueFindReplace(
+				exactFile,
+				tuple[1],
+				tuple[2],
+			);
+			return ["x", normalizedExact.find, normalizedExact.replace];
+		}
 		return ["x", ...tuple.slice(1)];
+	}
+	if (normalized === "ia" && typeof tuple[1] === "string" && typeof tuple[2] === "string") {
+		const exactFile = cwd && file && !isAbsolute(file) ? resolve(cwd, file) : file;
+		const normalizedInsert = normalizeInsertAnchorText(exactFile, tuple[1], tuple[2]);
+		return [normalized, normalizedInsert.anchor, normalizedInsert.text];
 	}
 	return normalized === alias ? tuple : [normalized, ...tuple.slice(1)];
 };
@@ -1619,6 +1757,36 @@ const compactTupleToApplyParams = (
 	const alias = normalizeCompactOpAlias(rawAlias);
 	const dry = params.p === true ? { dry_run: true } : {};
 	const diff = params.d === true ? { include_diff: true } : {};
+	const exactFile = isAbsolute(params.f) ? params.f : resolve(process.cwd(), params.f);
+	if (rawAlias.startsWith("/") && typeof tuple[1] === "string" && typeof tuple[2] === "string") {
+		const slash = normalizeSlashKeyReplacement(
+			exactFile,
+			rawAlias.slice(1),
+			tuple[1],
+			tuple[2],
+		);
+		if (!slash) {
+			throw new InvalidParamsError({
+				reason: "unsupported slash-key provider replacement",
+			});
+		}
+		return {
+			file: params.f,
+			operation: "replace_unique",
+			edit: slash,
+			...dry,
+			...diff,
+		};
+	}
+	if (rawAlias === "d1" && typeof tuple[2] === "string" && typeof tuple[3] === "string") {
+		return {
+			file: params.f,
+			operation: "replace_unique",
+			edit: { find: tuple[2], replace: tuple[3] },
+			...dry,
+			...diff,
+		};
+	}
 	switch (alias) {
 		case "rr":
 			return translateReplaceReturnTuple(params, tuple, dry, diff);
@@ -1731,12 +1899,18 @@ const compactTupleToApplyParams = (
 					...diff,
 				};
 			}
+			const exactFile = isAbsolute(params.f) ? params.f : resolve(process.cwd(), params.f);
+			const normalizedExact = normalizeUniqueFindReplace(
+				exactFile,
+				needString(tuple[1], "ru find"),
+				needString(tuple[2], "ru replace"),
+			);
 			return {
 				file: params.f,
 				operation: "replace_unique",
 				edit: {
-					find: needString(tuple[1], "ru find"),
-					replace: needString(tuple[2], "ru replace"),
+					find: normalizedExact.find,
+					replace: normalizedExact.replace,
 				},
 				...dry,
 				...diff,
