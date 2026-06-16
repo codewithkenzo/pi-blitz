@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-06-11T21:01:16.752Z",
+  "profile": "minimal",
+  "profileLabel": "minimal-v0",
+  "tools": [
+    {
+      "name": "blitz_edit",
+      "label": "blitz edit",
+      "description": "Blitz edit. Args {f?,e}. Tuples: [x,old,new], [x,file,old,new], [rb|ia,file,kind,name,text].",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "e"
+        ],
+        "properties": {
+          "f": {
+            "minLength": 1,
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "e": {
+            "minItems": 1,
+            "maxItems": 64,
+            "type": "array",
+            "items": {
+              "minItems": 3,
+              "maxItems": 5,
+              "description": "OpenAI-compatible edit tuple. Supported shapes: ['x',old,new], ['x',file,old,new], ['rb'|'ia',file,kind,name,text]. Runtime still validates op and tuple length.",
+              "type": "array",
+              "items": {
+                "description": "Compact op tuple item.",
+                "anyOf": [
+                  {
+                    "maxLength": 65536,
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

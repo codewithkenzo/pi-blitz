@@ -8,6 +8,9 @@ export interface PiBlitzDetails {
 	partial?: boolean;
 	degraded?: boolean;
 	status?: string;
+	terminal?: boolean;
+	noWrite?: boolean;
+	actionRequired?: string;
 	parseFallback?: boolean;
 	lane?: string;
 	mode?: string;
@@ -38,6 +41,27 @@ export interface PiBlitzDetails {
 	validation?: unknown;
 	metrics?: unknown;
 	operation?: string;
+	selected?: "blitz" | "core" | "apply_patch";
+	profile?: string;
+	tool?: string;
+	contextSavingsPct?: number;
+	schemaTokensExpected?: number;
+	argTokensExpected?: number;
+	outputTokensExpected?: number;
+	fallbackContextTokensExpected?: number;
+	selectedBecause?: string;
+	count?: number;
+	files?: number;
+	groupedApply?: boolean;
+	sequentialApply?: boolean;
+	sameFileAtomic?: boolean;
+	crossFileAtomic?: boolean;
+	atomicityNote?: string;
+	rollbackAttempted?: boolean;
+	rollbackSucceeded?: boolean;
+	rollbackFiles?: number;
+	rollbackErrors?: string[];
+	failedApplyIndex?: number;
 }
 
 export interface BlitzToolResult {
@@ -81,7 +105,9 @@ export const runTool = async <A>(
 	throw new Error(`pi-blitz failed: ${Cause.pretty(exit.cause)}`);
 };
 
-const renderSoftText = (err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>): string => {
+const renderSoftText = (
+	err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>,
+): string => {
 	const suggest = err.suggest ? `\nsuggest: ${err.suggest}` : "";
 	return `pi-blitz ${err.reason}: ${err.stderr.trim()}${suggest}`;
 };

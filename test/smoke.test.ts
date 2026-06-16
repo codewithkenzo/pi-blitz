@@ -1,5 +1,8 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test";
+import { chmod, mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { Effect } from "effect";
 import { Value } from "@sinclair/typebox/value";
 import {
@@ -11,7 +14,17 @@ import {
 } from "../src/errors.js";
 import { makePathLocks } from "../src/mutex.js";
 import { runTool } from "../src/tool-runtime.js";
-import { applyToolParamsSchema, parseApplyResultPayload, patchToolParamsSchema } from "../src/tools.js";
+import {
+	applyToolParamsSchema,
+	buildCompactApplyRequest,
+	opToolDef,
+	opToolParamsSchema,
+	parseApplyResultPayload,
+	patchToolParamsSchema,
+	routeEditToolDef,
+	routeEditToolParamsSchema,
+	translateCompactOpParams,
+} from "../src/tools.js";
 
 const wait = (ms: number): Promise<void> =>
 	new Promise((r) => {
@@ -35,6 +48,348 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 			ops: [["replace", "handleRequest", "return 1;", "return 2;", "only"]],
 		};
 		expect(Value.Check(patchToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_op schema accepts compact alias tuples", () => {
+		const valid = {
+			f: "src/app.ts",
+			ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]],
+			p: true,
+		};
+		expect(Value.Check(opToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_op builds compact Zig IR without verbose expansion", () => {
+		expect(
+			buildCompactApplyRequest("/repo/src/app.ts", {
+				f: "src/app.ts",
+				ops: [["rb", "function", "next", "\n  return 2;\n"]],
+			}),
+		).toEqual({
+			v: 1,
+			f: "/repo/src/app.ts",
+			ops: [["rb", "function", "next", "\n  return 2;\n"]],
+		});
+	});
+
+	test("pi_blitz_op executes compact request shape directly", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-blitz-compact-"));
+		const bin = join(dir, "fake-blitz.ts");
+		const src = join(dir, "src.ts");
+		const capture = join(dir, "stdin.json");
+		await Bun.write(src, "function next(){ return 1; }\n");
+		await Bun.write(
+			bin,
+			`#!/usr/bin/env bun\nconst input = await Bun.stdin.text();\nawait Bun.write(${JSON.stringify(capture)}, input);\nconsole.log(JSON.stringify({ status: "applied", operation: "compact", file: JSON.parse(input).f, validation: { parseClean: true } }));\n`,
+		);
+		await chmod(bin, 0o755);
+		const tool = opToolDef(bin, dir);
+		const result = await tool.execute("tcid", {
+			f: src,
+			ops: [["rb", "function", "next", "\n  return 2;\n"]],
+		});
+		expect(result.content[0]?.text).toContain("blitz apply");
+		const captured = JSON.parse(await Bun.file(capture).text());
+		expect(captured).toEqual({
+			v: 1,
+			f: src,
+			ops: [["rb", "function", "next", "\n  return 2;\n"]],
+		});
+	});
+
+	test("pi_blitz_route_edit schema accepts token-first routing fields", () => {
+		const valid = {
+			f: "src/app.ts",
+			r: "auto" as const,
+			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
+			fallbackContextTokensExpected: 500,
+		};
+		expect(Value.Check(routeEditToolParamsSchema, valid)).toBe(true);
+	});
+
+	test("pi_blitz_route_edit declines without compact payload in auto mode", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/app.ts",
+		});
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.actionRequired).toBe(
+			"use_external_core_or_apply_patch",
+		);
+		expect(result.content[0]?.text).toContain("no-write terminal");
+		expect(result.details?.contextSavingsPct).toBe(0);
+		expect(result.details?.schemaTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.argTokensExpected).toBe(0);
+		expect(result.details?.outputTokensExpected).toBeGreaterThan(0);
+		expect(result.details?.fallbackContextTokensExpected).toBe(0);
+		expect(result.details?.selectedBecause).toContain("no Blitz ops/s payload");
+	});
+
+	test("pi_blitz_route_edit declines requested core without mutating", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/app.ts",
+			r: "core",
+			s: "rr\tformatStatus\tstatus.toUpperCase()\tonly",
+			fallbackContextTokensExpected: 1000,
+		});
+		expect(result.details?.selected).toBe("core");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.details?.selectedBecause).toContain(
+			"does not call core/apply_patch internally",
+		);
+	});
+
+	test("pi_blitz_route_edit requested apply_patch returns terminal decline", async () => {
+		const tool = routeEditToolDef("blitz", process.cwd());
+		const result = await tool.execute("tcid", {
+			f: "src/config.ts",
+			r: "apply_patch",
+			s: "apply_patch\tAPI_URL\thttps://example.com",
+			fallbackContextTokensExpected: 200,
+		});
+		expect(result.details?.selected).toBe("apply_patch");
+		expect(result.details?.status).toBe("declined");
+		expect(result.details?.terminal).toBe(true);
+		expect(result.details?.noWrite).toBe(true);
+		expect(result.content[0]?.text).toContain(
+			"next=use external core/apply_patch",
+		);
+		expect(result.details?.selectedBecause).toContain(
+			"does not call core/apply_patch internally",
+		);
+	});
+
+	test("pi_blitz_op translates all aliases to apply payloads", () => {
+		const f = "src/app.ts";
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["rr", "formatStatus", "status.toUpperCase()", "only"]],
+			}),
+		).toEqual({
+			file: f,
+			operation: "patch",
+			edit: {
+				ops: [
+					["replace_return", "formatStatus", "status.toUpperCase()", "only"],
+				],
+			},
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["rr", "formatStatus", "last", '"unknown"']],
+			}),
+		).toEqual({
+			file: f,
+			operation: "patch",
+			edit: { ops: [["replace_return", "formatStatus", '"unknown"', "last"]] },
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["rb", "fn", "old", "new", "last"]],
+			}),
+		).toEqual({
+			file: f,
+			operation: "replace_body_span",
+			target: { symbol: "fn", range: "body" },
+			edit: { find: "old", replace: "new", occurrence: "last" },
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["ib", "fn", "anchor", "before", "text", "only"]],
+			}),
+		).toEqual({
+			file: f,
+			operation: "insert_body_span",
+			target: { symbol: "fn", range: "body" },
+			edit: {
+				anchor: "anchor",
+				position: "before",
+				text: "text",
+				occurrence: "only",
+			},
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["wb", "fn", "before", "after", 2]],
+			}),
+		).toEqual({
+			file: f,
+			operation: "wrap_body",
+			target: { symbol: "fn", range: "body" },
+			edit: {
+				before: "before",
+				keep: "body",
+				after: "after",
+				indentKeptBodyBy: 2,
+			},
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["tc", "fn", "catchBody", 2]] }),
+		).toEqual({
+			file: f,
+			operation: "patch",
+			edit: { ops: [["try_catch", "fn", "catchBody", 2]] },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["ru", "old", "new"]], p: true }),
+		).toEqual({
+			file: f,
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+			dry_run: true,
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["replace", "old", "new"]] }),
+		).toEqual({
+			file: f,
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["exact_replace", "old", "new"]] }),
+		).toEqual({
+			file: f,
+			operation: "replace_unique",
+			edit: { find: "old", replace: "new" },
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				ops: [["ia", "anchor", "text", "before"]],
+			}),
+		).toEqual({
+			file: f,
+			operation: "insert_before_anchor",
+			edit: { anchor: "anchor", text: "text" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["ia", "after", "anchor", "text"]] }),
+		).toEqual({
+			file: f,
+			operation: "insert_after_anchor",
+			edit: { anchor: "anchor", text: "text" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["bt", "start", "end", "new"]] }),
+		).toEqual({
+			file: f,
+			operation: "replace_between",
+			edit: { start: "start", end: "end", replace: "new" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["as", "## Notes", "body"]] }),
+		).toEqual({
+			file: f,
+			operation: "append_section",
+			edit: { heading: "## Notes", text: "body" },
+		});
+		expect(translateCompactOpParams({ f, ops: [["ek", "line"]] })).toEqual({
+			file: f,
+			operation: "ensure_line",
+			edit: { line: "line" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["dk", 3, 9, "remove"]] }),
+		).toEqual({
+			file: f,
+			operation: "delete_range",
+			edit: { start: 3, end: 9, expected: "remove" },
+		});
+		expect(
+			translateCompactOpParams({ f, ops: [["sk", "name", "value"]] }),
+		).toEqual({
+			file: f,
+			operation: "set_key",
+			edit: { key: "name", value: "value" },
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				s: "rr\tformatStatus\tstatus.toLowerCase()\tonly",
+			}),
+		).toEqual({
+			file: f,
+			operation: "patch",
+			edit: {
+				ops: [
+					["replace_return", "formatStatus", "status.toLowerCase()", "only"],
+				],
+			},
+		});
+		expect(translateCompactOpParams({ f, s: "dk\t3\t9\tremove" })).toEqual({
+			file: f,
+			operation: "delete_range",
+			edit: { start: 3, end: 9, expected: "remove" },
+		});
+	});
+
+	test("pi_blitz_op compact script decodes escaped string fields", () => {
+		const f = "src/app.ts";
+		expect(
+			translateCompactOpParams({
+				f,
+				s: "ia\t  console.log('start');\t\\n  console.time('load');",
+			}),
+		).toEqual({
+			file: f,
+			operation: "insert_after_anchor",
+			edit: {
+				anchor: "  console.log('start');",
+				text: "\n  console.time('load');",
+			},
+		});
+		expect(
+			translateCompactOpParams({
+				f,
+				s: "ia\tafter\tanchor\tline\\nnext\\tindent\\rret\\\\slash",
+			}),
+		).toEqual({
+			file: f,
+			operation: "insert_after_anchor",
+			edit: { anchor: "anchor", text: "line\nnext\tindent\rret\\slash" },
+		});
+		expect(translateCompactOpParams({ f, s: "sk\tenabled\ttrue" })).toEqual({
+			file: f,
+			operation: "set_key",
+			edit: { key: "enabled", value: true },
+		});
+		expect(translateCompactOpParams({ f, s: "dk\t3\t9\tremove" })).toEqual({
+			file: f,
+			operation: "delete_range",
+			edit: { start: 3, end: 9, expected: "remove" },
+		});
+	});
+
+	test("pi_blitz_op fails closed for malformed aliases", () => {
+		expect(() =>
+			translateCompactOpParams({
+				f: "src/app.ts",
+				ops: [["dk", "3", "9", "remove"]],
+			}),
+		).toThrow(InvalidParamsError);
+		expect(() =>
+			translateCompactOpParams({ f: "src/app.ts", ops: [["dk", 3, 9]] }),
+		).toThrow(InvalidParamsError);
+		expect(() =>
+			translateCompactOpParams({ f: "src/app.ts", ops: [["as", "## Notes"]] }),
+		).toThrow(InvalidParamsError);
+		expect(() =>
+			translateCompactOpParams({
+				f: "src/app.ts",
+				ops: [["rr", "fn", "last"]],
+			}),
+		).toThrow(InvalidParamsError);
 	});
 
 	test("pi_blitz_apply schema rejects unknown operation", () => {
@@ -62,16 +417,28 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		expect(payload?.status).toBe("applied");
 		expect(payload?.operation).toBe("replace_body_span");
 		expect(payload?.file).toBe("src/app.ts");
-		expect(payload?.metrics?.estimatedPayloadSavedPctVsRealisticAnchor).toBe(42);
+		expect(payload?.metrics?.estimatedPayloadSavedPctVsRealisticAnchor).toBe(
+			42,
+		);
 		expect(payload?.diffSummary).toEqual({ added: 2, removed: 1 });
 	});
 
 	test("errors are Data.TaggedError instances with correct _tag", () => {
-		expect(new BlitzSoftError({ reason: "no-backup", stderr: "" })._tag).toBe("BlitzSoftError");
-		expect(new BlitzMissingError({ binary: "blitz" })._tag).toBe("BlitzMissingError");
-		expect(new BlitzTimeoutError({ command: "c", timeoutMs: 1 })._tag).toBe("BlitzTimeoutError");
-		expect(new InvalidParamsError({ reason: "r" })._tag).toBe("InvalidParamsError");
-		expect(new PathEscapeError({ path: "/x", cwd: "/y" })._tag).toBe("PathEscapeError");
+		expect(new BlitzSoftError({ reason: "no-backup", stderr: "" })._tag).toBe(
+			"BlitzSoftError",
+		);
+		expect(new BlitzMissingError({ binary: "blitz" })._tag).toBe(
+			"BlitzMissingError",
+		);
+		expect(new BlitzTimeoutError({ command: "c", timeoutMs: 1 })._tag).toBe(
+			"BlitzTimeoutError",
+		);
+		expect(new InvalidParamsError({ reason: "r" })._tag).toBe(
+			"InvalidParamsError",
+		);
+		expect(new PathEscapeError({ path: "/x", cwd: "/y" })._tag).toBe(
+			"PathEscapeError",
+		);
 	});
 
 	test("path locks prove serialization (no overlap on same path)", async () => {
@@ -141,15 +508,28 @@ describe("@codewithkenzo/pi-blitz smoke", () => {
 		const locks = makePathLocks();
 		const exposed = locks as unknown as { internalMap?: Map<string, unknown> };
 		// Public API doesn't expose internals; test via side-effect: re-acquiring after release works.
-		await Effect.runPromise(locks.withLock("/tmp/cleanup", Effect.sync(() => {})));
-		await Effect.runPromise(locks.withLock("/tmp/cleanup", Effect.sync(() => {})));
+		await Effect.runPromise(
+			locks.withLock(
+				"/tmp/cleanup",
+				Effect.sync(() => {}),
+			),
+		);
+		await Effect.runPromise(
+			locks.withLock(
+				"/tmp/cleanup",
+				Effect.sync(() => {}),
+			),
+		);
 		// Sanity: no memory exposed externally (don't leak Map), and repeat calls succeed.
 		expect(exposed.internalMap).toBeUndefined();
 	});
 
 	test("runTool returns isError for BlitzSoftError", async () => {
 		const eff = Effect.fail(
-			new BlitzSoftError({ reason: "no-backup", stderr: "No backup recorded for x" }),
+			new BlitzSoftError({
+				reason: "no-backup",
+				stderr: "No backup recorded for x",
+			}),
 		);
 		const result = await runTool(eff, () => {
 			throw new Error("serialize should not be called on failure");
