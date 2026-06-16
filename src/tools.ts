@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { Effect } from "effect";
+import { readFile, writeFile } from "node:fs/promises";
 import { spawnCollectNode } from "./spawn.js";
 import { canonicalize } from "./paths.js";
 import { runTool, type BlitzToolResult } from "./tool-runtime.js";
@@ -1702,6 +1703,7 @@ const executeCompactOpParams = (
 	binary: string,
 	cwd: string,
 	params: CompactOpParams,
+	options: { skipLock?: boolean } = {},
 ): Promise<BlitzToolResult> => {
 	const eff = Effect.gen(function* () {
 		const abs = yield* bindPath(params.f, cwd);
@@ -1722,14 +1724,12 @@ const executeCompactOpParams = (
 		const argv = ["apply", "--edit", "-", "--json"];
 		if (params.p === true) argv.push("--dry-run");
 		if (params.d === true) argv.push("--diff");
-		const res = yield* locks.withLock(
-			abs,
-			runBlitz(binary, argv, {
-				stdin: request,
-				cwd,
-				timeoutMs: 60_000,
-			}),
-		);
+		const run = runBlitz(binary, argv, {
+			stdin: request,
+			cwd,
+			timeoutMs: 60_000,
+		});
+		const res = yield* (options.skipLock ? run : locks.withLock(abs, run));
 		if (res.exitCode === 0) {
 			const parsed = parseApplyResponsePayload(res.stdout);
 			if (parsed !== undefined) {
@@ -1873,6 +1873,33 @@ const toCommonApplyParams = (
 		: {}),
 });
 
+type FileSnapshot = {
+	path: string;
+	content: Buffer;
+};
+
+const snapshotFiles = async (paths: readonly string[]): Promise<FileSnapshot[]> =>
+	Promise.all(
+		paths.map(async (path) => ({
+			path,
+			content: await readFile(path),
+		})),
+	);
+
+const restoreSnapshots = async (
+	snapshots: readonly FileSnapshot[],
+): Promise<{ succeeded: boolean; files: number; errors: string[] }> => {
+	const errors: string[] = [];
+	for (const snapshot of snapshots) {
+		try {
+			await writeFile(snapshot.path, snapshot.content);
+		} catch (err) {
+			errors.push(`${snapshot.path}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+	return { succeeded: errors.length === 0, files: snapshots.length, errors };
+};
+
 export const blitzEditToolDef = (binary: string, cwd: string) =>
 	({
 		name: "blitz_edit",
@@ -1916,49 +1943,93 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 			});
 
 			const safeUnits = jobs.map((job) => ({ f: job.f, ops: [job.op] }));
-			const uniqueFiles = new Set(safeUnits.map((job) => job.f));
+			const uniqueFiles = [...new Set(safeUnits.map((job) => job.f))];
 			const sequentialApply = safeUnits.length > 1;
 
-			for (const job of safeUnits) {
-				const preview = await executeCompactOpParams(binary, cwd, {
-					f: job.f,
-					ops: job.ops,
-					p: true,
-				});
-				if (preview.isError) return preview;
-			}
+			return runTool(
+				Effect.gen(function* () {
+					const absPaths = yield* Effect.all(
+						uniqueFiles.map((file) => bindPath(file, cwd)),
+					);
+					const absByFile = new Map(
+						uniqueFiles.map((file, idx) => [file, absPaths[idx]!]),
+					);
 
-			for (const job of safeUnits) {
-				const applied = await executeCompactOpParams(binary, cwd, {
-					f: job.f,
-					ops: job.ops,
-				});
-				if (applied.isError) return applied;
-			}
-			const crossFileNote =
-				uniqueFiles.size > 1
-					? " crossFileAtomic=false reason=Blitz CLI has no multi-file transaction; previews all safe units before sequential applies."
-					: "";
-			const sequentialNote = sequentialApply
-				? " groupedApply=false sequentialApply=true sameFileAtomic=false reason=Blitz CLI compact grouped exact replacements are unsupported; previews every safe unit before applying in order."
-					: "";
-			return okResult(
-				`ok c=${jobs.length} files=${uniqueFiles.size} groupedApply=${!sequentialApply} sequentialApply=${sequentialApply}${sequentialNote}${crossFileNote}`,
-				{
-					status: "applied",
-					count: jobs.length,
-					files: uniqueFiles.size,
-					groupedApply: !sequentialApply,
-					sequentialApply,
-					sameFileAtomic: !sequentialApply,
-					crossFileAtomic: uniqueFiles.size <= 1 && !sequentialApply,
-					...(sequentialApply || uniqueFiles.size > 1
-						? {
-								atomicityNote:
-									"Blitz CLI has no transaction for multiple compact safe units; pi-blitz previews every safe unit first, then applies units in order, so later apply failure can leave earlier units mutated.",
+					return yield* locks.withSortedLocks(
+						absPaths,
+						Effect.promise(async () => {
+							for (const job of safeUnits) {
+								const preview = await executeCompactOpParams(
+									binary,
+									cwd,
+									{
+										f: absByFile.get(job.f) ?? job.f,
+										ops: job.ops,
+										p: true,
+									},
+									{ skipLock: true },
+								);
+								if (preview.isError) return preview;
 							}
-						: {}),
-				},
+
+							const snapshots = await snapshotFiles(absPaths);
+							for (const [idx, job] of safeUnits.entries()) {
+								const applied = await executeCompactOpParams(
+									binary,
+									cwd,
+									{
+										f: absByFile.get(job.f) ?? job.f,
+										ops: job.ops,
+									},
+									{ skipLock: true },
+								);
+								if (applied.isError) {
+									const rollback = await restoreSnapshots(snapshots);
+									return {
+										...applied,
+										content: [
+											{
+												type: "text" as const,
+												text: `${applied.content[0]?.text ?? "pi-blitz blitz-error"}; rollbackAttempted=true rollbackSucceeded=${rollback.succeeded} rollbackFiles=${rollback.files}${rollback.errors.length ? ` rollbackErrors=${rollback.errors.join(" | ")}` : ""}`,
+											},
+										],
+										details: {
+											...applied.details,
+											status: "rolled-back",
+											atomicityNote:
+												"blitz_edit restored all touched files from pre-apply snapshots after an apply failure; no core/apply_patch fallback used.",
+											rollbackAttempted: true,
+											rollbackSucceeded: rollback.succeeded,
+											rollbackFiles: rollback.files,
+											failedApplyIndex: idx,
+										},
+									};
+								}
+							}
+
+							const atomicityNote = sequentialApply
+								? "rollback-backed atomic batch: pi-blitz snapshots touched files after previews and restores them if any later apply fails; no core/apply_patch fallback used."
+								: "single Blitz apply is atomic for this file at tool-call level; no core/apply_patch fallback used.";
+							return okResult(
+								`ok c=${jobs.length} files=${uniqueFiles.length} groupedApply=${!sequentialApply} sequentialApply=${sequentialApply} sameFileAtomic=true crossFileAtomic=true rollbackBacked=${sequentialApply}`,
+								{
+									status: "applied",
+									count: jobs.length,
+									files: uniqueFiles.length,
+									groupedApply: !sequentialApply,
+									sequentialApply,
+									sameFileAtomic: true,
+									crossFileAtomic: true,
+									rollbackAttempted: false,
+									rollbackSucceeded: true,
+									rollbackFiles: uniqueFiles.length,
+									atomicityNote,
+								},
+							);
+						}),
+					);
+				}),
+				(v) => v,
 			);
 		},
 	}) as const;

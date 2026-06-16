@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Mocked spawn runner for this test file only.
-const spawnCollectMock = mock(async () => ({
+const defaultSpawnCollect = async () => ({
 	stdout: JSON.stringify({
 		status: "applied",
 		operation: "replace_body_span",
@@ -22,7 +21,10 @@ const spawnCollectMock = mock(async () => ({
 	stderr: "",
 	exitCode: 0,
 	durationMs: 10,
-}));
+});
+
+// Mocked spawn runner for this test file only.
+const spawnCollectMock = mock(defaultSpawnCollect);
 
 await mock.module("../src/spawn.js", () => ({
 	spawnCollectNode: spawnCollectMock,
@@ -36,6 +38,7 @@ describe("pi_blitz_apply runtime path", () => {
 
 	beforeEach(() => {
 		spawnCollectMock.mockClear();
+		spawnCollectMock.mockImplementation(defaultSpawnCollect);
 		tmpDir = mkdtempSync(join(tmpdir(), "pi-blitz-apply-"));
 		file = join(tmpDir, "app.ts");
 		writeFileSync(file, "export function foo() { return 1; }\n");
@@ -224,7 +227,7 @@ describe("pi_blitz_apply runtime path", () => {
 		]);
 	});
 
-	test("blitz_edit previews same-file multi exact ops individually then applies in order", async () => {
+	test("blitz_edit applies same-file multi exact ops with rollback-backed atomic reporting", async () => {
 		const tool = tools.blitzEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
 			f: "app.ts",
@@ -237,9 +240,12 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(result.isError).toBeUndefined();
 		expect(result.content[0]?.text).toContain("groupedApply=false");
 		expect(result.content[0]?.text).toContain("sequentialApply=true");
+		expect(result.content[0]?.text).toContain("sameFileAtomic=true");
 		expect(result.details?.groupedApply).toBe(false);
 		expect(result.details?.sequentialApply).toBe(true);
-		expect(result.details?.sameFileAtomic).toBe(false);
+		expect(result.details?.sameFileAtomic).toBe(true);
+		expect(result.details?.crossFileAtomic).toBe(true);
+		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 
 		const firstPreview = spawnCollectMock.mock.calls[0] as unknown as [
@@ -346,7 +352,7 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(spawnCollectMock).toHaveBeenCalledTimes(1);
 	});
 
-	test("blitz_edit previews all file groups before any grouped apply and reports cross-file limit", async () => {
+	test("blitz_edit applies cross-file batches with rollback-backed atomic reporting", async () => {
 		const tool = tools.blitzEditToolDef("blitz", tmpDir);
 		const result = await tool.execute("1", {
 			e: [
@@ -356,8 +362,10 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("crossFileAtomic=false");
-		expect(result.details?.crossFileAtomic).toBe(false);
+		expect(result.content[0]?.text).toContain("crossFileAtomic=true");
+		expect(result.details?.sameFileAtomic).toBe(true);
+		expect(result.details?.crossFileAtomic).toBe(true);
+		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 		const first = spawnCollectMock.mock.calls[0] as unknown as [
 			string[],
@@ -379,6 +387,51 @@ describe("pi_blitz_apply runtime path", () => {
 		expect(second[0]).toContain("--dry-run");
 		expect(third[0]).not.toContain("--dry-run");
 		expect(fourth[0]).not.toContain("--dry-run");
+	});
+
+	test("blitz_edit rolls back earlier mutations when a later apply fails", async () => {
+		const beforeApp = readFileSync(file, "utf8");
+		const beforeOther = readFileSync(join(tmpDir, "other.ts"), "utf8");
+		let call = 0;
+		spawnCollectMock.mockImplementation(async () => {
+			call += 1;
+			if (call === 3) {
+				writeFileSync(file, "export function foo() { return 2; }\n");
+			}
+			if (call === 4) {
+				return {
+					stdout: JSON.stringify({
+						code: "NO_MATCH",
+						reason: "second apply failed",
+					}),
+					stderr: "",
+					exitCode: 1,
+					durationMs: 10,
+				};
+			}
+			return defaultSpawnCollect();
+		});
+
+		const tool = tools.blitzEditToolDef("blitz", tmpDir);
+		const result = await tool.execute("1", {
+			e: [
+				["x", "app.ts", "return 1;", "return 2;"],
+				["x", "other.ts", "return 3;", "return 4;"],
+			],
+		});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("NO_MATCH");
+		expect(result.content[0]?.text).toContain("rollbackAttempted=true");
+		expect(result.content[0]?.text).toContain("rollbackSucceeded=true");
+		expect(result.details?.status).toBe("rolled-back");
+		expect(result.details?.rollbackAttempted).toBe(true);
+		expect(result.details?.rollbackSucceeded).toBe(true);
+		expect(result.details?.rollbackFiles).toBe(2);
+		expect(result.details?.failedApplyIndex).toBe(1);
+		expect(readFileSync(file, "utf8")).toBe(beforeApp);
+		expect(readFileSync(join(tmpDir, "other.ts"), "utf8")).toBe(beforeOther);
+		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 	});
 
 	test("invokes blitz apply --edit - --json with JSON IR", async () => {

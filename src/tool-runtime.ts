@@ -57,6 +57,10 @@ export interface PiBlitzDetails {
 	sameFileAtomic?: boolean;
 	crossFileAtomic?: boolean;
 	atomicityNote?: string;
+	rollbackAttempted?: boolean;
+	rollbackSucceeded?: boolean;
+	rollbackFiles?: number;
+	failedApplyIndex?: number;
 }
 
 export interface BlitzToolResult {
