@@ -17,6 +17,11 @@ import {
 	resolvePiBlitzToolProfile,
 	serializeToolSpecs,
 } from "../src/tool-profiles.js";
+import {
+	blitzLanguageCapabilities,
+	minimalBlitzEditDeclinedStructuralAliases,
+	minimalBlitzEditStructuralDeclineReason,
+} from "../src/language-capabilities.js";
 
 const originalProfileEnv = process.env.PI_BLITZ_TOOL_PROFILE;
 
@@ -203,18 +208,55 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
+
+	test("language capability matrix records exact, structural, JS/JSX, and JSONC set_key decisions", () => {
+		const byExtension = new Map(
+			blitzLanguageCapabilities.map((capability) => [capability.extension, capability]),
+		);
+		const requiredExtensions = [
+			".ts",
+			".tsx",
+			".js",
+			".jsx",
+			".py",
+			".go",
+			".rs",
+			".json",
+			".jsonc",
+			".yaml",
+			".toml",
+			".md",
+			".html",
+			".css",
+		] as const;
+
+		expect([...byExtension.keys()].sort()).toEqual([...requiredExtensions].sort());
+		for (const extension of requiredExtensions) {
+			expect(byExtension.get(extension)?.exactText).toBe("supported");
+		}
+		expect(byExtension.get(".js")?.structuralAst).toBe("unsupported");
+		expect(byExtension.get(".js")?.note).toContain("not exposed");
+		expect(byExtension.get(".jsx")?.structuralAst).toBe("unsupported");
+		expect(byExtension.get(".jsx")?.note).toContain("not exposed");
+		expect(byExtension.get(".jsonc")?.setKey).toBe("unsupported");
+		expect(byExtension.get(".jsonc")?.note).toContain("Known gap");
+		expect(byExtension.get(".json")?.setKey).toBe("supported");
+		expect(byExtension.get(".yaml")?.setKey).toBe("supported");
+		expect(byExtension.get(".toml")?.setKey).toBe("supported");
+	});
+
 	test("minimal blitz_edit exact path edits supported-ish and plain text files", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
 		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-exact-filetypes-"));
 		const previousCwd = process.cwd();
 		try {
 			process.chdir(tmp);
-			const cases = [
-				{ file: "app.ts", before: "export const value = 1;\n", oldText: "value = 1", newText: "value = 2" },
-				{ file: "script.py", before: "value = 1\n", oldText: "value = 1", newText: "value = 2" },
-				{ file: "notes.md", before: "status: draft\n", oldText: "draft", newText: "done" },
-				{ file: "plain.txt", before: "status=draft\n", oldText: "draft", newText: "done" },
-			] as const;
+			const cases = blitzLanguageCapabilities.map((capability) => ({
+				file: `sample${capability.extension}`,
+				before: `status_${capability.extension.slice(1)}=draft\n`,
+				oldText: "draft",
+				newText: "done",
+			}));
 			for (const item of cases) writeFileSync(join(tmp, item.file), item.before);
 			const { pi, registeredTools } = createFakePi();
 
@@ -415,6 +457,93 @@ describe("pi-blitz tool profiles", () => {
 			expect(result.content[0]?.text).toContain("unsupported_structural_op_minimal");
 			expect(result.content[0]?.text).not.toContain("MISSING_FIELD");
 			expect(result.content[0]?.text).not.toContain("ok");
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+
+	test("minimal blitz_edit declines unsupported structural aliases across language matrix", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-structural-decline-matrix-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const files = [
+				"app.ts",
+				"app.tsx",
+				"app.js",
+				"app.jsx",
+				"app.py",
+				"app.go",
+				"app.rs",
+				"config.json",
+				"config.jsonc",
+				"config.yaml",
+				"config.toml",
+				"notes.md",
+				"index.html",
+				"style.css",
+			] as const;
+			const before = "token=draft\n";
+			for (const file of files) writeFileSync(join(tmp, file), before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: Array<[string, string, string, string, string]> },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
+			};
+
+			for (const [idx, alias] of minimalBlitzEditDeclinedStructuralAliases.entries()) {
+				const file = files[idx % files.length]!;
+				const result = await tool.execute("1", {
+					e: [[alias, file, "token", "draft", "done"]],
+				});
+
+				expect(result.isError).toBe(true);
+				expect(result.content[0]?.text).toContain(`decline op=${alias}`);
+				expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
+				expect(result.content[0]?.text).not.toContain("ok");
+				expect(result.details?.reason).toBe(minimalBlitzEditStructuralDeclineReason);
+			}
+			for (const file of files) expect(readFileSync(join(tmp, file), "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit records JSONC set_key as unsupported no-write decline", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-jsonc-set-key-gap-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "config.jsonc");
+			const before = '{\n  // comment\n  "mode": "draft"\n}\n';
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["sk", string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["sk", "config.jsonc", "mode", "done"]],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=sk");
+			expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
+			expect(result.details?.reason).toBe(minimalBlitzEditStructuralDeclineReason);
 			expect(readFileSync(file, "utf8")).toBe(before);
 		} finally {
 			process.chdir(previousCwd);

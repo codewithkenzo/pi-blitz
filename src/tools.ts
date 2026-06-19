@@ -13,6 +13,10 @@ import {
 	BlitzTimeoutError,
 	InvalidParamsError,
 } from "./errors.js";
+import {
+	isMinimalBlitzEditStructuralAlias,
+	minimalBlitzEditStructuralDeclineReason,
+} from "./language-capabilities.js";
 
 // Module-level locks shared across all tool definitions so concurrent tool calls
 // targeting the same canonical path serialize.
@@ -1282,7 +1286,9 @@ type BlitzEditParams = {
 	e: Array<
 		| ["x", string, string]
 		| ["x", string, string, string]
-		| ["rb" | "ia", string, string, string, string]
+		| [string, string, string]
+		| [string, string, string, string]
+		| [string, string, string, string, string]
 	>;
 };
 
@@ -2501,8 +2507,8 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			}
 
-			const structuralTuple = params.e.find(
-				(tuple) => tuple[0] === "rb" || tuple[0] === "ia",
+			const structuralTuple = params.e.find((tuple) =>
+				isMinimalBlitzEditStructuralAlias(tuple[0]),
 			);
 			if (structuralTuple) {
 				const op = structuralTuple[0];
@@ -2513,13 +2519,15 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 							text:
 								"decline op=" +
 								op +
-								" reason=unsupported_structural_op_minimal no_mutation=true use core/apply_patch or PI_BLITZ_TOOL_PROFILE=structural",
+								" reason=" +
+								minimalBlitzEditStructuralDeclineReason +
+								" no_mutation=true use core/apply_patch or PI_BLITZ_TOOL_PROFILE=structural",
 						},
 					],
 					isError: true,
 					details: {
 						status: "declined",
-						reason: "unsupported_structural_op_minimal",
+						reason: minimalBlitzEditStructuralDeclineReason,
 						operation: op,
 						noWrite: true,
 					},
@@ -2544,16 +2552,13 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
 					};
 				}
-				if (tuple[0] === "rb" || tuple[0] === "ia") {
-					return {
-						f: tuple[1],
-						op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<
-							string | number | boolean
-						>,
-					};
+				if (isMinimalBlitzEditStructuralAlias(tuple[0])) {
+					throw new InvalidParamsError({
+						reason: minimalBlitzEditStructuralDeclineReason,
+					});
 				}
 				throw new InvalidParamsError({
-					reason: "e only supports x/rb/ia tuples",
+					reason: "e only supports exact x tuples in minimal profile",
 				});
 			});
 
