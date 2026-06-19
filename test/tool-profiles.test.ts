@@ -25,6 +25,17 @@ import {
 
 const originalProfileEnv = process.env.PI_BLITZ_TOOL_PROFILE;
 
+const tokenRegressionLimits = {
+	minimalSerializedToolBytes: 1_150,
+	residentSkillBytes: 1_000,
+	successResultBytes: 500,
+	errorResultBytes: 160,
+} as const;
+
+const byteLength = (value: string): number => Buffer.byteLength(value, "utf8");
+
+const resultBytes = (value: unknown): number => byteLength(JSON.stringify(value));
+
 afterEach(() => {
 	if (originalProfileEnv === undefined)
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
@@ -149,6 +160,75 @@ describe("pi-blitz tool profiles", () => {
 		expect(eSchema.items?.description).toContain(
 			"['x',old,new] is allowed only when top-level f is present",
 		);
+	});
+
+	test("minimal blitz_edit schema and resident skill stay under token guard rails", () => {
+		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
+		const serializedTool = JSON.stringify(specs.tools[0]);
+		const skillText = readFileSync(
+			join(import.meta.dir, "../skills/pi-blitz/SKILL.md"),
+			"utf8",
+		);
+
+		expect(byteLength(serializedTool)).toBeLessThanOrEqual(
+			tokenRegressionLimits.minimalSerializedToolBytes,
+		);
+		expect(byteLength(skillText)).toBeLessThanOrEqual(
+			tokenRegressionLimits.residentSkillBytes,
+		);
+	});
+
+	test("minimal blitz_edit public output and result payload stay compact", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-token-guard-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			writeFileSync(join(tmp, "app.ts"), "const answer = 1;\n");
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as BlitzEditTool;
+			const success = await tool.execute("1", {
+				f: "app.ts",
+				e: [["x", "const answer = 1;", "const answer = 2;"]],
+			});
+			const error = await tool.execute("2", {
+				f: "app.ts",
+				e: [["x", "missing", "present"]],
+			});
+
+			expect(resultBytes(success)).toBeLessThanOrEqual(
+				tokenRegressionLimits.successResultBytes,
+			);
+			expect(resultBytes(error)).toBeLessThanOrEqual(
+				tokenRegressionLimits.errorResultBytes,
+			);
+			expect(success.content[0]?.text).toBe(
+				"ok c=1 files=1 groupedApply=true sequentialApply=false sameFileAtomic=true crossFileAtomic=true rollbackBacked=false",
+			);
+			expect(error.content[0]?.text).toBe("pi-blitz blitz-error: NO_MATCH");
+			expect(Object.keys(success.details ?? {}).sort()).toEqual([
+				"atomicityNote",
+				"count",
+				"crossFileAtomic",
+				"files",
+				"groupedApply",
+				"rollbackAttempted",
+				"rollbackFiles",
+				"rollbackSucceeded",
+				"sameFileAtomic",
+				"sequentialApply",
+				"status",
+			]);
+			expect(Object.keys(error.details ?? {}).sort()).toEqual(["reason"]);
+			const successWire = JSON.stringify(success);
+			expect(successWire).not.toContain("const answer = 1");
+			expect(successWire).not.toContain("const answer = 2");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 
 	test("missing and empty profile resolve to minimal", () => {
