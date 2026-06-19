@@ -183,6 +183,74 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
+	test("minimal blitz_edit declines structural rb without mutating TS", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-decline-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "app.ts");
+			const before = "export function add(a: number, b: number) {\n  return a + b\n}\n";
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["rb", string, string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["rb", "app.ts", "function", "add", "return a - b"]],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=rb");
+			expect(result.content[0]?.text).toContain("unsupported_structural_op_minimal");
+			expect(result.content[0]?.text).not.toContain("MISSING_FIELD");
+			expect(result.content[0]?.text).not.toContain("ok");
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit declines structural ia without mutating Python", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-ia-decline-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "app.py");
+			const before = "def add(a, b):\n    return a + b\n";
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["ia", string, string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["ia", "app.py", "function", "add", "def sub(a, b):\n    return a - b"]],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=ia");
+			expect(result.content[0]?.text).toContain("unsupported_structural_op_minimal");
+			expect(result.content[0]?.text).not.toContain("MISSING_FIELD");
+			expect(result.content[0]?.text).not.toContain("ok");
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("index registration honors explicit full profile", async () => {
 		process.env.PI_BLITZ_TOOL_PROFILE = "full";
 		const { pi, registeredToolNames } = createFakePi();

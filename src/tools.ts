@@ -181,7 +181,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 			minItems: 3,
 			maxItems: 5,
 			description:
-				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new] for exact replacements. ['x',old,new] is allowed only when top-level f is present. Structural: ['rb'|'ia',file,kind,name,text]. Runtime validates op and tuple length.",
+				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new] for exact replacements; ['x',old,new] is allowed only when top-level f is present. Structural aliases are intentionally declined by minimal profile.",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -2483,12 +2483,37 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}; e must be an array of tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. rb replaces symbol body only. ia inserts after symbol declaration only, not text anchors. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
+			"Blitz edit. Args {f?,e}; e must be an array of exact x tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. Structural rb/ia aliases are quarantined in minimal profile and return no-write decline. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
 		parameters: blitzEditToolParamsSchema,
 		execute: async (
 			_tcid: string,
 			params: BlitzEditParams,
 		): Promise<BlitzToolResult> => {
+			const structuralTuple = params.e.find(
+				(tuple) => tuple[0] === "rb" || tuple[0] === "ia",
+			);
+			if (structuralTuple) {
+				const op = structuralTuple[0];
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text:
+								"decline op=" +
+								op +
+								" reason=unsupported_structural_op_minimal no_mutation=true use core/apply_patch or PI_BLITZ_TOOL_PROFILE=structural",
+						},
+					],
+					isError: true,
+					details: {
+						status: "declined",
+						reason: "unsupported_structural_op_minimal",
+						operation: op,
+						noWrite: true,
+					},
+				};
+			}
+
 			const jobs = params.e.map((tuple) => {
 				if (tuple[0] === "x") {
 					if (tuple.length === 3) {
