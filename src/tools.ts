@@ -3,7 +3,11 @@ import { Effect } from "effect";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { spawnCollectNode } from "./spawn.js";
+import {
+	spawnCollectNode,
+	type SpawnOptions,
+	type SpawnResult,
+} from "./spawn.js";
 import { canonicalize } from "./paths.js";
 import { runTool, type BlitzToolResult } from "./tool-runtime.js";
 import { makePathLocks } from "./mutex.js";
@@ -1056,6 +1060,21 @@ class SpawnException {
 	constructor(public readonly cause: unknown) {}
 }
 
+export type BlitzRunner = (
+	argv: string[],
+	opts: SpawnOptions,
+) => Promise<SpawnResult>;
+
+let blitzRunnerOverride: BlitzRunner | undefined;
+
+export const setBlitzRunnerForTests = (runner: BlitzRunner): (() => void) => {
+	const previous = blitzRunnerOverride;
+	blitzRunnerOverride = runner;
+	return () => {
+		blitzRunnerOverride = previous;
+	};
+};
+
 const runBlitz = (
 	binary: string,
 	argv: string[],
@@ -1065,15 +1084,12 @@ const runBlitz = (
 		timeoutMs: number;
 		signal?: AbortSignal;
 	},
-): Effect.Effect<
-	{ stdout: string; stderr: string; exitCode: number },
-	BlitzTimeoutError | BlitzMissingError
-> =>
+): Effect.Effect<SpawnResult, BlitzTimeoutError | BlitzMissingError> =>
 	Effect.gen(function* () {
 		const cmd = [binary, "--workspace-root", opts.cwd, ...argv];
 		const result = yield* Effect.tryPromise({
 			try: () => {
-				const spawnOpts: Parameters<typeof spawnCollectNode>[1] = {
+				const spawnOpts: SpawnOptions = {
 					cwd: opts.cwd,
 					timeoutMs: opts.timeoutMs,
 					env: {
@@ -1087,7 +1103,7 @@ const runBlitz = (
 				};
 				if (opts.stdin !== undefined) spawnOpts.stdin = opts.stdin;
 				if (opts.signal !== undefined) spawnOpts.signal = opts.signal;
-				return spawnCollectNode(cmd, spawnOpts);
+				return (blitzRunnerOverride ?? spawnCollectNode)(cmd, spawnOpts);
 			},
 			catch: (cause) => new SpawnException(cause),
 		}).pipe(
