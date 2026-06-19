@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { Effect } from "effect";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { extname, isAbsolute, resolve } from "node:path";
 import {
 	spawnCollectNode,
 	type SpawnOptions,
@@ -189,7 +189,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 			minItems: 3,
 			maxItems: 5,
 			description:
-				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new] for exact replacements; ['x',old,new] is allowed only when top-level f is present. Structural aliases are intentionally declined by minimal profile.",
+				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new]. TS/JS structural slice: ['rb',file,'function',name,body] and ['ia',file,'function',name,text].",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -537,6 +537,21 @@ const assertByteCap = (payload: string, maxBytes: number, label: string) => {
 
 const isNonEmptyString = (value: unknown): value is string => {
 	return typeof value === "string" && value.trim().length > 0;
+};
+
+const isMinimalClassCStructuralTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb" | "ia", string, "function", string, string] =>
+	(tuple[0] === "rb" || tuple[0] === "ia") &&
+	tuple.length === 5 &&
+	typeof tuple[1] === "string" &&
+	tuple[2] === "function" &&
+	isNonEmptyString(tuple[3]) &&
+	typeof tuple[4] === "string";
+
+const isMinimalClassCLanguage = (file: string): boolean => {
+	const ext = extname(file).toLowerCase();
+	return ext === ".ts" || ext === ".js";
 };
 
 const isOccurrence = (
@@ -1759,6 +1774,14 @@ const normalizeCompactTupleForBlitz = (
 		}
 		return ["x", ...tuple.slice(1)];
 	}
+	if (
+		normalized === "ia" &&
+		tuple[1] === "function" &&
+		typeof tuple[2] === "string" &&
+		typeof tuple[3] === "string"
+	) {
+		return [normalized, tuple[1], tuple[2], tuple[3]];
+	}
 	if (normalized === "ia" && typeof tuple[1] === "string" && typeof tuple[2] === "string") {
 		const exactFile = cwd && file && !isAbsolute(file) ? resolve(cwd, file) : file;
 		const normalizedInsert = normalizeInsertAnchorText(exactFile, tuple[1], tuple[2]);
@@ -2505,7 +2528,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}; e must be an array of exact x tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. Structural rb/ia aliases are quarantined in minimal profile and return no-write decline. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
+			"Blitz edit. Args {f?,e}. Use x exact replacement; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. TS/JS only structural slice: [rb,file,function,name,body] replaces unique function body; [ia,file,function,name,text] inserts after unique function declaration. Other structural aliases decline no-write. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
 		parameters: blitzEditToolParamsSchema,
 			execute: async (
 			_tcid: string,
@@ -2523,8 +2546,11 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			}
 
-			const structuralTuple = params.e.find((tuple) =>
-				isMinimalBlitzEditStructuralAlias(tuple[0]),
+			const structuralTuple = params.e.find(
+				(tuple) =>
+					isMinimalBlitzEditStructuralAlias(tuple[0]) &&
+					(!isMinimalClassCStructuralTuple(tuple) ||
+						!isMinimalClassCLanguage(tuple[1])),
 			);
 			if (structuralTuple) {
 				const op = structuralTuple[0];
@@ -2568,13 +2594,26 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
 					};
 				}
+				if (isMinimalClassCStructuralTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
+					return {
+						f: tuple[1],
+						op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<
+							string | number | boolean
+						>,
+					};
+				}
 				if (isMinimalBlitzEditStructuralAlias(tuple[0])) {
 					throw new InvalidParamsError({
 						reason: minimalBlitzEditStructuralDeclineReason,
 					});
 				}
 				throw new InvalidParamsError({
-					reason: "e only supports exact x tuples in minimal profile",
+					reason: "e only supports x plus TS/JS rb/ia function tuples in minimal profile",
 				});
 			});
 

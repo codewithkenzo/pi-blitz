@@ -10,7 +10,7 @@ export type BlitzLanguageCapability = {
 export const blitzLanguageCapabilities = [
 	{ extension: ".ts", language: "TypeScript", exactText: "supported", structuralAst: "supported", setKey: "supported", note: "Tree-sitter TypeScript grammar-backed structural edits." },
 	{ extension: ".tsx", language: "TSX", exactText: "supported", structuralAst: "supported", setKey: "supported", note: "Tree-sitter TSX grammar-backed structural edits." },
-	{ extension: ".js", language: "JavaScript", exactText: "supported", structuralAst: "unsupported", setKey: "unsupported", note: "JS exact text works; JS AST structural support is intentionally not exposed until grammar coverage is wired and tested." },
+	{ extension: ".js", language: "JavaScript", exactText: "supported", structuralAst: "supported", setKey: "unsupported", note: "Tree-sitter TypeScript grammar-backed structural edits for JS function declarations." },
 	{ extension: ".jsx", language: "JSX", exactText: "supported", structuralAst: "unsupported", setKey: "unsupported", note: "JSX exact text works; JSX AST structural support is intentionally not exposed until grammar coverage is wired and tested." },
 	{ extension: ".py", language: "Python", exactText: "supported", structuralAst: "supported", setKey: "unsupported", note: "Tree-sitter Python grammar-backed structural edits." },
 	{ extension: ".go", language: "Go", exactText: "supported", structuralAst: "supported", setKey: "unsupported", note: "Tree-sitter Go grammar-backed structural edits." },

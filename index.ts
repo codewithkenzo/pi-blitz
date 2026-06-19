@@ -14,6 +14,7 @@ const baseDir = dirname(fileURLToPath(import.meta.url));
 const requireFromExtension = createRequire(import.meta.url);
 
 export const resolveBundledBlitzBinary = (): string => {
+	if (process.env.BLITZ_BIN) return process.env.BLITZ_BIN;
 	try {
 		return requireFromExtension.resolve("@codewithkenzo/blitz/bin/blitz.js");
 	} catch {
