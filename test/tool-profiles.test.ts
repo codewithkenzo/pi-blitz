@@ -510,6 +510,48 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
+	test("minimal blitz_edit declines class-c structural rb batch without mutating TS", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-batch-decline-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "structural-10.ts");
+			let before = "";
+			for (let i = 1; i <= 10; i++)
+				before += `export function node${i}(value: number): number {\n  return value + ${i};\n}\n\n`;
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: Array<["rb", string, string, string, string]> },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				e: Array.from({ length: 10 }, (_, index) => [
+					"rb",
+					"structural-10.ts",
+					"function",
+					`node${index + 1}`,
+					`\n  return value * ${index + 2};\n`,
+				]),
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=rb");
+			expect(result.content[0]?.text).toContain("unsupported_structural_op_minimal");
+			expect(result.content[0]?.text).toContain("no_mutation=true");
+			expect(result.content[0]?.text).not.toContain("ok");
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("minimal blitz_edit declines structural ia without mutating Python", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
 		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-ia-decline-"));
