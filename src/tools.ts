@@ -2485,10 +2485,22 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		description:
 			"Blitz edit. Args {f?,e}; e must be an array of exact x tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. Structural rb/ia aliases are quarantined in minimal profile and return no-write decline. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
 		parameters: blitzEditToolParamsSchema,
-		execute: async (
+			execute: async (
 			_tcid: string,
 			params: BlitzEditParams,
 		): Promise<BlitzToolResult> => {
+			const allExactNoops = params.e.every((tuple) => {
+				if (tuple[0] !== "x") return false;
+				return tuple.length === 3 ? tuple[1] === tuple[2] : tuple[2] === tuple[3];
+			});
+			if (allExactNoops) {
+				return okResult("noop reason=already_present no_mutation=true", {
+					status: "noop",
+					reason: "already_present",
+					noWrite: true,
+				});
+			}
+
 			const structuralTuple = params.e.find(
 				(tuple) => tuple[0] === "rb" || tuple[0] === "ia",
 			);

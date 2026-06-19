@@ -1,6 +1,13 @@
 /// <reference types="bun-types" />
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import piBlitz, { resolveBundledBlitzBinary } from "../index.js";
@@ -18,6 +25,19 @@ afterEach(() => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
 	else process.env.PI_BLITZ_TOOL_PROFILE = originalProfileEnv;
 });
+
+type BlitzEditResult = {
+	isError?: boolean;
+	content: Array<{ text?: string }>;
+	details?: Record<string, unknown>;
+};
+
+type BlitzEditTool = {
+	execute: (
+		tcid: string,
+		params: { f?: string; e: Array<["x", string, string] | ["x", string, string, string]> },
+	) => Promise<BlitzEditResult>;
+};
 
 const createFakePi = () => {
 	const registeredToolNames: string[] = [];
@@ -177,6 +197,157 @@ describe("pi-blitz tool profiles", () => {
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("ok c=1");
 			expect(readFileSync(file, "utf8")).toContain("return a + b + 1");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit exact path edits supported-ish and plain text files", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-exact-filetypes-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const cases = [
+				{ file: "app.ts", before: "export const value = 1;\n", oldText: "value = 1", newText: "value = 2" },
+				{ file: "script.py", before: "value = 1\n", oldText: "value = 1", newText: "value = 2" },
+				{ file: "notes.md", before: "status: draft\n", oldText: "draft", newText: "done" },
+				{ file: "plain.txt", before: "status=draft\n", oldText: "draft", newText: "done" },
+			] as const;
+			for (const item of cases) writeFileSync(join(tmp, item.file), item.before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as BlitzEditTool;
+			for (const item of cases) {
+				const result = await tool.execute("1", {
+					e: [["x", item.file, item.oldText, item.newText]],
+				});
+
+				expect(result.isError).toBeUndefined();
+				expect(result.content[0]?.text).toContain("ok c=1");
+				expect(readFileSync(join(tmp, item.file), "utf8")).toBe(
+					item.before.replace(item.oldText, item.newText),
+				);
+			}
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit exact path leaves files unchanged on no-match, ambiguous, noop, and stale content", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-exact-errors-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			writeFileSync(join(tmp, "no-match.ts"), "export const value = 1;\n");
+			writeFileSync(join(tmp, "ambiguous.ts"), "token\ntoken\n");
+			writeFileSync(join(tmp, "noop.txt"), "same\n");
+			writeFileSync(join(tmp, "stale.ts"), "export const value = 2;\n");
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as BlitzEditTool;
+			const noMatch = await tool.execute("1", {
+				f: "no-match.ts",
+				e: [["x", "missing", "present"]],
+			});
+			const ambiguous = await tool.execute("1", {
+				f: "ambiguous.ts",
+				e: [["x", "token", "changed"]],
+			});
+			const noop = await tool.execute("1", {
+				f: "noop.txt",
+				e: [["x", "same", "same"]],
+			});
+			const stale = await tool.execute("1", {
+				f: "stale.ts",
+				e: [["x", "export const value = 1;", "export const value = 2;"]],
+			});
+
+			expect(noMatch.isError).toBe(true);
+			expect(noMatch.content[0]?.text).toContain("NO_MATCH");
+			expect(ambiguous.isError).toBe(true);
+			expect(ambiguous.content[0]?.text).toContain("AMBIGUOUS_MATCH");
+			expect(noop.isError).toBeUndefined();
+			expect(noop.content[0]?.text).toContain("noop reason=already_present");
+			expect(noop.details?.status).toBe("noop");
+			expect(noop.details?.reason).toBe("already_present");
+			expect(stale.isError).toBe(true);
+			expect(stale.content[0]?.text).toContain("NO_MATCH");
+			expect(readFileSync(join(tmp, "no-match.ts"), "utf8")).toBe("export const value = 1;\n");
+			expect(readFileSync(join(tmp, "ambiguous.ts"), "utf8")).toBe("token\ntoken\n");
+			expect(readFileSync(join(tmp, "noop.txt"), "utf8")).toBe("same\n");
+			expect(readFileSync(join(tmp, "stale.ts"), "utf8")).toBe("export const value = 2;\n");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit exact path blocks symlink escape, outside absolute path, and traversal", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-path-safety-"));
+		const outside = mkdtempSync(join(tmpdir(), "pi-blitz-outside-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const inside = join(tmp, "inside.ts");
+			const outsideFile = join(outside, "outside.ts");
+			writeFileSync(inside, "export const value = 1;\n");
+			writeFileSync(outsideFile, "export const value = 1;\n");
+			symlinkSync(outsideFile, join(tmp, "escape.ts"));
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as BlitzEditTool;
+			const attempts = [
+				() => tool.execute("1", { e: [["x", "escape.ts", "value = 1", "value = 2"]] }),
+				() => tool.execute("1", { e: [["x", outsideFile, "value = 1", "value = 2"]] }),
+				() => tool.execute("1", { e: [["x", "../outside.ts", "value = 1", "value = 2"]] }),
+			];
+			for (const attempt of attempts) {
+				await expect(attempt()).rejects.toThrow(/PathEscapeError|InvalidParamsError/);
+			}
+			expect(readFileSync(inside, "utf8")).toBe("export const value = 1;\n");
+			expect(readFileSync(outsideFile, "utf8")).toBe("export const value = 1;\n");
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit cross-file batch rolls back earlier mutation after later stale failure", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-cross-file-rollback-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const first = join(tmp, "first.ts");
+			const second = join(tmp, "second.ts");
+			const beforeFirst = "export const first = 1;\n";
+			const beforeSecond = "export const second = 2;\n";
+			writeFileSync(first, beforeFirst);
+			writeFileSync(second, beforeSecond);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as BlitzEditTool;
+			const result = await tool.execute("1", {
+				e: [
+					["x", "first.ts", "first = 1", "first = 10"],
+					["x", "second.ts", "second = 1", "second = 10"],
+				],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("NO_MATCH");
+			expect(readFileSync(first, "utf8")).toBe(beforeFirst);
+			expect(readFileSync(second, "utf8")).toBe(beforeSecond);
 		} finally {
 			process.chdir(previousCwd);
 			rmSync(tmp, { recursive: true, force: true });
