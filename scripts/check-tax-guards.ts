@@ -23,8 +23,8 @@ const guards = [
 	{
 		id: "resident-skill",
 		bytes: byteLength(residentSkill),
-		maxBytes: 713,
-		note: "Packaged skills/pi-blitz/SKILL.md resident text after Sprint G safety-preserving trim.",
+		maxBytes: 569,
+		note: "Packaged skills/pi-blitz/SKILL.md resident text after Sprint I zero-resident trim.",
 	},
 	{
 		id: "success-output",
