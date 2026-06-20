@@ -324,14 +324,14 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("groupedApply=false");
-		expect(result.content[0]?.text).toContain("sequentialApply=true");
-		expect(result.content[0]?.text).toContain("sameFileAtomic=true");
+		expect(result.content[0]?.text).toContain("ok c=2 f=1");
+		expect(result.content[0]?.text).toContain("seq=true");
+		expect(result.content[0]?.text).toContain("rb=true");
 		expect(result.details?.groupedApply).toBe(false);
 		expect(result.details?.sequentialApply).toBe(true);
 		expect(result.details?.sameFileAtomic).toBe(true);
 		expect(result.details?.crossFileAtomic).toBe(true);
-		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
+		expect(result.details?.atomicityNote).toContain("snapshot rollback");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 
 		const firstPreview = spawnCollectMock.mock.calls[0] as unknown as [
@@ -452,10 +452,11 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("crossFileAtomic=true");
+		expect(result.content[0]?.text).toContain("ok c=2 f=2");
+		expect(result.content[0]?.text).toContain("seq=true");
 		expect(result.details?.sameFileAtomic).toBe(true);
 		expect(result.details?.crossFileAtomic).toBe(true);
-		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
+		expect(result.details?.atomicityNote).toContain("snapshot rollback");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 		const first = spawnCollectMock.mock.calls[0] as unknown as [
 			string[],

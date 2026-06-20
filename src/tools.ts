@@ -175,12 +175,11 @@ export const patchToolParamsSchema = Type.Object({
 	),
 });
 
-export const opTupleValueSchema = Type.Union(
-	[Type.String({ maxLength: SNIPPET_MAX }), Type.Number(), Type.Boolean()],
-	{
-		description: "Compact op tuple item.",
-	},
-);
+export const opTupleValueSchema = Type.Union([
+	Type.String({ maxLength: SNIPPET_MAX }),
+	Type.Number(),
+	Type.Boolean(),
+]);
 
 export const blitzEditToolParamsSchema = Type.Object({
 	f: Type.Optional(Type.String({ minLength: 1, maxLength: PATH_MAX })),
@@ -188,8 +187,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 		Type.Array(opTupleValueSchema, {
 			minItems: 3,
 			maxItems: 5,
-			description:
-				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new]. TS/JS structural slice: ['rb',file,'function',name,body] and ['ia',file,'function',name,text].",
+			description: "Tuple: ['x',file,old,new], ['x',old,new]+f, TS/JS ['rb'|'ia',file,'function',name,text].",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -557,6 +555,15 @@ const isMinimalRbOldNewTuple = (
 	typeof tuple[1] === "string" &&
 	isNonEmptyString(tuple[2]) &&
 	typeof tuple[3] === "string";
+
+export const minimalBlitzEditSuccessText = (
+	count: number,
+	files: number,
+	sequential: boolean,
+) => `ok c=${count} f=${files} seq=${sequential} rb=${sequential}`;
+
+export const minimalBlitzEditDeclineText = (op: string) =>
+	`decline op=${op} reason=${minimalBlitzEditStructuralDeclineReason} no_mutation=true`;
 
 const normalizeMinimalFunctionBody = (body: string): string => {
 	const withLeadingNewline = body.startsWith("\n") ? body : `\n${body}`;
@@ -2544,7 +2551,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}. Use x exact replacement; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. TS/JS only structural slice: [rb,file,function,name,body] replaces unique function body; [ia,file,function,name,text] inserts after unique function declaration. Other structural aliases decline no-write. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
+			"Blitz edit {f?,e}. x exact replace; prefer [x,file,old,new], [x,old,new] needs f. TS/JS rb body, ia after function. Fail closed; no fallback. On ok/noop stop.",
 		parameters: blitzEditToolParamsSchema,
 			execute: async (
 			_tcid: string,
@@ -2576,11 +2583,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 						{
 							type: "text" as const,
 							text:
-								"decline op=" +
-								op +
-								" reason=" +
-								minimalBlitzEditStructuralDeclineReason +
-								" no_mutation=true use core/apply_patch or PI_BLITZ_TOOL_PROFILE=structural",
+								minimalBlitzEditDeclineText(op),
 						},
 					],
 					isError: true,
@@ -2706,10 +2709,14 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 							}
 
 							const atomicityNote = sequentialApply
-								? "rollback-backed atomic batch: pi-blitz snapshots touched files after previews and restores them if any later apply fails; no core/apply_patch fallback used."
-								: "single Blitz apply is atomic for this file at tool-call level; no core/apply_patch fallback used.";
+								? "snapshot rollback on later apply failure; no fallback"
+								: "single Blitz apply; no fallback";
 							return okResult(
-								`ok c=${jobs.length} files=${uniqueFiles.length} groupedApply=${!sequentialApply} sequentialApply=${sequentialApply} sameFileAtomic=true crossFileAtomic=true rollbackBacked=${sequentialApply}`,
+								minimalBlitzEditSuccessText(
+									jobs.length,
+									uniqueFiles.length,
+									sequentialApply,
+								),
 								{
 									status: "applied",
 									count: jobs.length,

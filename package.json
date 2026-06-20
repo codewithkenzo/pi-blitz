@@ -23,7 +23,8 @@
     "tsc": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "dump:tool-specs": "bun scripts/dump-tool-specs.ts"
+    "dump:tool-specs": "bun scripts/dump-tool-specs.ts",
+    "check:tax": "bun scripts/check-tax-guards.ts"
   },
   "keywords": [
     "pi",

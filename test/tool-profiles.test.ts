@@ -32,9 +32,9 @@ const useLocalBlitzBinaryIfAvailable = (): void => {
 };
 
 const tokenRegressionLimits = {
-	minimalSerializedToolBytes: 1_150,
-	residentSkillBytes: 1_000,
-	successResultBytes: 500,
+	minimalSerializedToolBytes: 760,
+	residentSkillBytes: 850,
+	successResultBytes: 420,
 	errorResultBytes: 160,
 } as const;
 
@@ -157,15 +157,14 @@ describe("pi-blitz tool profiles", () => {
 		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
 		const tool = specs.tools[0]!;
 		expect(tool.description).toContain("prefer [x,file,old,new]");
-		expect(tool.description).toContain("3-item [x,old,new] requires top-level f");
+		expect(tool.description).toContain("[x,old,new] needs f");
 
 		const parameters = tool.parameters as Record<string, unknown>;
 		const properties = parameters.properties as Record<string, unknown>;
 		const eSchema = properties.e as { items?: { description?: string } };
-		expect(eSchema.items?.description).toContain(
-			"Prefer ['x',file,old,new]",
-		);
-		expect(eSchema.items?.description).toContain("TS/JS structural slice");
+		expect(eSchema.items?.description).toContain("['x',file,old,new]");
+		expect(eSchema.items?.description).toContain("TS/JS");
+		expect(eSchema.items?.description).toContain("['rb'|'ia',file,'function',name,text]");
 	});
 
 	test("minimal blitz_edit schema and resident skill stay under token guard rails", () => {
@@ -210,9 +209,7 @@ describe("pi-blitz tool profiles", () => {
 			expect(resultBytes(error)).toBeLessThanOrEqual(
 				tokenRegressionLimits.errorResultBytes,
 			);
-			expect(success.content[0]?.text).toBe(
-				"ok c=1 files=1 groupedApply=true sequentialApply=false sameFileAtomic=true crossFileAtomic=true rollbackBacked=false",
-			);
+			expect(success.content[0]?.text).toBe("ok c=1 f=1 seq=false rb=false");
 			expect(error.content[0]?.text).toBe("pi-blitz blitz-error: NO_MATCH");
 			expect(Object.keys(success.details ?? {}).sort()).toEqual([
 				"atomicityNote",
