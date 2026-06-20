@@ -17,14 +17,14 @@ const guards = [
 	{
 		id: "minimal-schema",
 		bytes: byteLength(minimalSchema),
-		maxBytes: 760,
-		note: "Serialized minimal blitz_edit tool spec. Sprint F target: stay below current reduced shape and below pre-fix 1060 bytes.",
+		maxBytes: 666,
+		note: "Serialized minimal blitz_edit tool spec. Sprint G tiny-exact floor after schema wording trim.",
 	},
 	{
 		id: "resident-skill",
 		bytes: byteLength(residentSkill),
-		maxBytes: 850,
-		note: "Packaged skills/pi-blitz/SKILL.md resident text.",
+		maxBytes: 713,
+		note: "Packaged skills/pi-blitz/SKILL.md resident text after Sprint G safety-preserving trim.",
 	},
 	{
 		id: "success-output",

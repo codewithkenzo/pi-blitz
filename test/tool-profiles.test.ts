@@ -32,8 +32,8 @@ const useLocalBlitzBinaryIfAvailable = (): void => {
 };
 
 const tokenRegressionLimits = {
-	minimalSerializedToolBytes: 760,
-	residentSkillBytes: 850,
+	minimalSerializedToolBytes: 666,
+	residentSkillBytes: 713,
 	successResultBytes: 420,
 	errorResultBytes: 160,
 } as const;

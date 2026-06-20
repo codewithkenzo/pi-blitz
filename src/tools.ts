@@ -187,7 +187,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 		Type.Array(opTupleValueSchema, {
 			minItems: 3,
 			maxItems: 5,
-			description: "Tuple: ['x',file,old,new], ['x',old,new]+f, TS/JS ['rb'|'ia',file,'function',name,text].",
+			description: "['x',file,old,new] or ['x',old,new]+f; TS/JS ['rb'|'ia',file,'function',name,text].",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -2617,7 +2617,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit {f?,e}. x exact replace; prefer [x,file,old,new], [x,old,new] needs f. TS/JS rb body, ia after function. Fail closed; no fallback. On ok/noop stop.",
+			"Blitz {f?,e}. x exact; prefer [x,file,old,new], [x,old,new] needs f. TS/JS rb body, ia after fn. Fail closed; no fallback. Stop on ok/noop.",
 		parameters: blitzEditToolParamsSchema,
 			execute: async (
 			_tcid: string,
