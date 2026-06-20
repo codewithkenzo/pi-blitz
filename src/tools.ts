@@ -556,6 +556,13 @@ const isMinimalRbOldNewTuple = (
 	isNonEmptyString(tuple[2]) &&
 	typeof tuple[3] === "string";
 
+const isMinimalRbBracedBodyTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb", string, string, string] =>
+	isMinimalRbOldNewTuple(tuple) &&
+	/^[A-Za-z_$][\w$]*$/.test(tuple[2]) &&
+	stripMinimalOuterBodyBraces(tuple[3]) !== null;
+
 export const minimalBlitzEditSuccessText = (
 	count: number,
 	files: number,
@@ -570,6 +577,65 @@ const normalizeMinimalFunctionBody = (body: string): string => {
 	return withLeadingNewline.endsWith("\n")
 		? withLeadingNewline
 		: `${withLeadingNewline}\n`;
+};
+
+const stripMinimalOuterBodyBraces = (body: string): string | null => {
+	const trimmed = body.trim();
+	if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+
+	let depth = 0;
+	let quote: '"' | "'" | "`" | null = null;
+	let escaped = false;
+	let lineComment = false;
+	let blockComment = false;
+	for (let idx = 0; idx < trimmed.length; idx++) {
+		const char = trimmed[idx]!;
+		const next = trimmed[idx + 1];
+
+		if (lineComment) {
+			if (char === "\n" || char === "\r") lineComment = false;
+			continue;
+		}
+		if (blockComment) {
+			if (char === "*" && next === "/") {
+				blockComment = false;
+				idx++;
+			}
+			continue;
+		}
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (char === quote) quote = null;
+			continue;
+		}
+		if (char === "/" && next === "/") {
+			lineComment = true;
+			idx++;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			blockComment = true;
+			idx++;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
+		if (char === "{") depth++;
+		if (char === "}") depth--;
+		if (depth === 0 && idx !== trimmed.length - 1) return null;
+		if (depth < 0) return null;
+	}
+	if (depth !== 0 || quote || lineComment || blockComment) return null;
+	return trimmed.slice(1, -1);
 };
 
 const isMinimalClassCLanguage = (file: string): boolean => {
@@ -2569,13 +2635,17 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			}
 
-			const structuralTuple = params.e.find(
-				(tuple) =>
-					isMinimalBlitzEditStructuralAlias(tuple[0]) &&
-					!isMinimalRbOldNewTuple(tuple) &&
-					(!isMinimalClassCStructuralTuple(tuple) ||
-						!isMinimalClassCLanguage(tuple[1])),
-			);
+			const structuralTuple = params.e.find((tuple) => {
+				if (!isMinimalBlitzEditStructuralAlias(tuple[0])) return false;
+				const supportedClassC =
+					isMinimalClassCStructuralTuple(tuple) &&
+					isMinimalClassCLanguage(tuple[1]);
+				const supportedBracedBody =
+					isMinimalRbBracedBodyTuple(tuple) && isMinimalClassCLanguage(tuple[1]);
+				const oldNewExact =
+					isMinimalRbOldNewTuple(tuple) && !isMinimalRbBracedBodyTuple(tuple);
+				return !supportedClassC && !supportedBracedBody && !oldNewExact;
+			});
 			if (structuralTuple) {
 				const op = structuralTuple[0];
 				return {
@@ -2629,6 +2699,28 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 							tuple[0] === "rb"
 								? normalizeMinimalFunctionBody(tuple[4])
 								: tuple[4],
+						] as Array<string | number | boolean>,
+					};
+				}
+				if (isMinimalRbBracedBodyTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
+					const body = stripMinimalOuterBodyBraces(tuple[3]);
+					if (body === null) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
+					return {
+						f: tuple[1],
+						op: [
+							"rb",
+							"function",
+							tuple[2],
+							normalizeMinimalFunctionBody(body),
 						] as Array<string | number | boolean>,
 					};
 				}

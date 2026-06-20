@@ -664,6 +664,79 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
+	test("minimal blitz_edit applies OpenAI braced rb function body tuple", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		useLocalBlitzBinaryIfAvailable();
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-openai-rb-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "medium.ts");
+			const before = "function mediumCompute(seed: number): number {\n  let total = seed;\n  total += 1;\n  return total;\n}\n";
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["rb", string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["rb", "medium.ts", "mediumCompute", "{\n  try {\n    let total = seed;\n    total += 1;\n    return total;\n  } catch {\n    return seed;\n  }\n}"]],
+			});
+
+			expect(result.isError).not.toBe(true);
+			expect(result.content[0]?.text).toContain("ok c=1");
+			expect(result.content[0]?.text).not.toContain("core/apply_patch");
+			expect(result.details?.status).toBe("applied");
+			expect(result.details?.atomicityNote).toContain("no fallback");
+			expect(readFileSync(file, "utf8")).toBe(
+				"function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    total += 1;\n    return total;\n  } catch {\n    return seed;\n  }\n}\n",
+			);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit declines OpenAI braced rb for non-TS files", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-openai-rb-decline-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "medium.py");
+			const before = "def medium_compute(seed):\n    return seed + 1\n";
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["rb", string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["rb", "medium.py", "medium_compute", "{\n  return seed + 2;\n}"]],
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=rb");
+			expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
+			expect(result.content[0]?.text).toContain("no_mutation=true");
+			expect(result.content[0]?.text).not.toContain("core/apply_patch");
+			expect(result.details?.status).toBe("declined");
+			expect(result.details?.noWrite).toBe(true);
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("minimal blitz_edit applies TS insert-after function declaration", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
 		useLocalBlitzBinaryIfAvailable();
