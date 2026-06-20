@@ -516,6 +516,82 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
+	test("minimal blitz_edit preserves brace newline for rb function body without boundary newlines", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		useLocalBlitzBinaryIfAvailable();
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-body-format-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "medium.ts");
+			writeFileSync(
+				file,
+				"function mediumCompute(seed: number): number {\n  let total = seed;\n  return total;\n}\n",
+			);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["rb", string, string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [[
+					"rb",
+					"medium.ts",
+					"function",
+					"mediumCompute",
+					"  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }",
+				]],
+			});
+
+			expect(result.isError).not.toBe(true);
+			expect(result.content[0]?.text).toContain("ok c=1");
+			expect(readFileSync(file, "utf8")).toBe(
+				"function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n}\n",
+			);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("minimal blitz_edit normalizes rb old/new whole function shape to exact edit", async () => {
+		delete process.env.PI_BLITZ_TOOL_PROFILE;
+		useLocalBlitzBinaryIfAvailable();
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-old-new-"));
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(tmp);
+			const file = join(tmp, "medium.ts");
+			const before = "function mediumCompute(seed: number): number {\n  let total = seed;\n  return total;\n}\n";
+			const after = "function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n}\n";
+			writeFileSync(file, before);
+			const { pi, registeredTools } = createFakePi();
+
+			await piBlitz(pi);
+			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
+				execute: (
+					tcid: string,
+					params: { e: [["rb", string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+			};
+			const result = await tool.execute("1", {
+				e: [["rb", "medium.ts", before, after]],
+			});
+
+			expect(result.isError).not.toBe(true);
+			expect(result.content[0]?.text).toContain("ok c=1");
+			expect(result.content[0]?.text).not.toContain("core/apply_patch");
+			expect(readFileSync(file, "utf8")).toBe(after);
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("minimal blitz_edit applies JS function body replacement", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
 		useLocalBlitzBinaryIfAvailable();

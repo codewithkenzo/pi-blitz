@@ -549,6 +549,22 @@ const isMinimalClassCStructuralTuple = (
 	isNonEmptyString(tuple[3]) &&
 	typeof tuple[4] === "string";
 
+const isMinimalRbOldNewTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb", string, string, string] =>
+	tuple[0] === "rb" &&
+	tuple.length === 4 &&
+	typeof tuple[1] === "string" &&
+	isNonEmptyString(tuple[2]) &&
+	typeof tuple[3] === "string";
+
+const normalizeMinimalFunctionBody = (body: string): string => {
+	const withLeadingNewline = body.startsWith("\n") ? body : `\n${body}`;
+	return withLeadingNewline.endsWith("\n")
+		? withLeadingNewline
+		: `${withLeadingNewline}\n`;
+};
+
 const isMinimalClassCLanguage = (file: string): boolean => {
 	const ext = extname(file).toLowerCase();
 	return ext === ".ts" || ext === ".js";
@@ -2549,6 +2565,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 			const structuralTuple = params.e.find(
 				(tuple) =>
 					isMinimalBlitzEditStructuralAlias(tuple[0]) &&
+					!isMinimalRbOldNewTuple(tuple) &&
 					(!isMinimalClassCStructuralTuple(tuple) ||
 						!isMinimalClassCLanguage(tuple[1])),
 			);
@@ -2602,9 +2619,26 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 					}
 					return {
 						f: tuple[1],
-						op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<
-							string | number | boolean
-						>,
+						op: [
+							tuple[0],
+							tuple[2],
+							tuple[3],
+							tuple[0] === "rb"
+								? normalizeMinimalFunctionBody(tuple[4])
+								: tuple[4],
+						] as Array<string | number | boolean>,
+					};
+				}
+				if (isMinimalRbOldNewTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason:
+								"unsupported rb old/new tuple for non-TS/JS file; provider emitted structural-old-new shape and pi-blitz declined without writes",
+						});
+					}
+					return {
+						f: tuple[1],
+						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
 					};
 				}
 				if (isMinimalBlitzEditStructuralAlias(tuple[0])) {
