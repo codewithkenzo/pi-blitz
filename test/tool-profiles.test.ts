@@ -156,15 +156,14 @@ describe("pi-blitz tool profiles", () => {
 	test("minimal blitz_edit guidance says 3-item x requires f and prefers 4-item x", () => {
 		const specs = serializeToolSpecs("blitz", process.cwd(), "minimal");
 		const tool = specs.tools[0]!;
-		expect(tool.description).toContain("prefer [x,file,old,new]");
+		expect(tool.description).toContain("Prefer [x,file,old,new]");
 		expect(tool.description).toContain("[x,old,new] needs f");
 
 		const parameters = tool.parameters as Record<string, unknown>;
 		const properties = parameters.properties as Record<string, unknown>;
 		const eSchema = properties.e as { items?: { description?: string } };
 		expect(eSchema.items?.description).toContain("['x',file,old,new]");
-		expect(eSchema.items?.description).toContain("TS/JS");
-		expect(eSchema.items?.description).toContain("['rb'|'ia',file,'function',name,text]");
+		expect(eSchema.items?.description).toContain("rb declines in minimal");
 	});
 
 	test("minimal blitz_edit schema and resident skill stay under token guard rails", () => {
@@ -479,15 +478,15 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
-	test("minimal blitz_edit applies TS function body replacement", async () => {
+	test("minimal blitz_edit declines strict rb tuple without mutation", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-ts-"));
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-decline-"));
 		const previousCwd = process.cwd();
 		try {
 			process.chdir(tmp);
 			const file = join(tmp, "app.ts");
-			writeFileSync(file, "export function add(a: number, b: number) {\n  return a + b;\n}\n");
+			const before = "export function add(a: number, b: number) {\n  return a + b;\n}\n";
+			writeFileSync(file, before);
 			const { pi, registeredTools } = createFakePi();
 
 			await piBlitz(pi);
@@ -495,238 +494,15 @@ describe("pi-blitz tool profiles", () => {
 				execute: (
 					tcid: string,
 					params: { e: [["rb", string, string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
 			};
 			const result = await tool.execute("1", {
 				e: [["rb", "app.ts", "function", "add", "\n  return a - b;\n"]],
 			});
 
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(result.content[0]?.text).not.toContain("core/apply_patch");
-			expect(readFileSync(file, "utf8")).toBe(
-				"export function add(a: number, b: number) {\n  return a - b;\n}\n",
-			);
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit preserves brace newline for rb function body without boundary newlines", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-body-format-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "medium.ts");
-			writeFileSync(
-				file,
-				"function mediumCompute(seed: number): number {\n  let total = seed;\n  return total;\n}\n",
-			);
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: [["rb", string, string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-			};
-			const result = await tool.execute("1", {
-				e: [[
-					"rb",
-					"medium.ts",
-					"function",
-					"mediumCompute",
-					"  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }",
-				]],
-			});
-
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(readFileSync(file, "utf8")).toBe(
-				"function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n}\n",
-			);
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit normalizes rb old/new whole function shape to exact edit", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-old-new-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "medium.ts");
-			const before = "function mediumCompute(seed: number): number {\n  let total = seed;\n  return total;\n}\n";
-			const after = "function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    return total;\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n}\n";
-			writeFileSync(file, before);
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: [["rb", string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-			};
-			const result = await tool.execute("1", {
-				e: [["rb", "medium.ts", before, after]],
-			});
-
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(result.content[0]?.text).not.toContain("core/apply_patch");
-			expect(readFileSync(file, "utf8")).toBe(after);
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit applies JS function body replacement", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-js-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "app.js");
-			writeFileSync(file, "function add(a, b) {\n  return a + b;\n}\n");
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: [["rb", string, string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-			};
-			const result = await tool.execute("1", {
-				e: [["rb", "app.js", "function", "add", "\n  return a - b;\n"]],
-			});
-
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(readFileSync(file, "utf8")).toBe("function add(a, b) {\n  return a - b;\n}\n");
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit applies class-c structural rb batch without fallback", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-batch-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "structural-10.ts");
-			let before = "";
-			for (let i = 1; i <= 10; i++)
-				before += `export function node${i}(value: number): number {\n  return value + ${i};\n}\n\n`;
-			writeFileSync(file, before);
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: Array<["rb", string, string, string, string]> },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
-			};
-			const result = await tool.execute("1", {
-				e: Array.from({ length: 10 }, (_, index) => [
-					"rb",
-					"structural-10.ts",
-					"function",
-					`node${index + 1}`,
-					`\n  return value * ${index + 2};\n`,
-				]),
-			});
-
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=10");
-			expect(result.content[0]?.text).not.toContain("core/apply_patch");
-			const after = readFileSync(file, "utf8");
-			expect(after).toContain("return value * 2;");
-			expect(after).toContain("return value * 11;");
-			expect(after).not.toBe(before);
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit applies OpenAI braced rb function body tuple", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-openai-rb-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "medium.ts");
-			const before = "function mediumCompute(seed: number): number {\n  let total = seed;\n  total += 1;\n  return total;\n}\n";
-			writeFileSync(file, before);
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: [["rb", string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
-			};
-			const result = await tool.execute("1", {
-				e: [["rb", "medium.ts", "mediumCompute", "{\n  try {\n    let total = seed;\n    total += 1;\n    return total;\n  } catch {\n    return seed;\n  }\n}"]],
-			});
-
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(result.content[0]?.text).not.toContain("core/apply_patch");
-			expect(result.details?.status).toBe("applied");
-			expect(result.details?.atomicityNote).toContain("no fallback");
-			expect(readFileSync(file, "utf8")).toBe(
-				"function mediumCompute(seed: number): number {\n  try {\n    let total = seed;\n    total += 1;\n    return total;\n  } catch {\n    return seed;\n  }\n}\n",
-			);
-		} finally {
-			process.chdir(previousCwd);
-			rmSync(tmp, { recursive: true, force: true });
-		}
-	});
-
-	test("minimal blitz_edit declines OpenAI braced rb for non-TS files", async () => {
-		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-openai-rb-decline-"));
-		const previousCwd = process.cwd();
-		try {
-			process.chdir(tmp);
-			const file = join(tmp, "medium.py");
-			const before = "def medium_compute(seed):\n    return seed + 1\n";
-			writeFileSync(file, before);
-			const { pi, registeredTools } = createFakePi();
-
-			await piBlitz(pi);
-			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
-				execute: (
-					tcid: string,
-					params: { e: [["rb", string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
-			};
-			const result = await tool.execute("1", {
-				e: [["rb", "medium.py", "medium_compute", "{\n  return seed + 2;\n}"]],
-			});
-
 			expect(result.isError).toBe(true);
-			expect(result.content[0]?.text).toContain("decline op=rb");
-			expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
-			expect(result.content[0]?.text).toContain("no_mutation=true");
+			expect(result.content[0]?.text).toBe("decline op=rb reason=unsupported_structural_op_minimal no_mutation=true");
+			expect(result.content[0]?.text).not.toContain("ok");
 			expect(result.content[0]?.text).not.toContain("core/apply_patch");
 			expect(result.details?.status).toBe("declined");
 			expect(result.details?.noWrite).toBe(true);
@@ -737,48 +513,49 @@ describe("pi-blitz tool profiles", () => {
 		}
 	});
 
-	test("minimal blitz_edit applies TS insert-after function declaration", async () => {
+	test("minimal blitz_edit declines rb old/new-ish whole-function shape without exact fallback", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-ia-ts-"));
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-rb-old-new-decline-"));
 		const previousCwd = process.cwd();
 		try {
 			process.chdir(tmp);
-			const file = join(tmp, "app.ts");
-			writeFileSync(file, "export function add(a: number, b: number) {\n  return a + b;\n}\n\nconst done = true;\n");
+			const file = join(tmp, "medium.ts");
+			const before = "function mediumCompute(seed: number): number {\n  let total = seed;\n  return total;\n}\n";
+			const after = "function mediumCompute(seed: number): number {\n  let total = seed;\n  return total + 1;\n}\n";
+			writeFileSync(file, before);
 			const { pi, registeredTools } = createFakePi();
 
 			await piBlitz(pi);
 			const tool = registeredTools.find((item) => item.name === "blitz_edit") as {
 				execute: (
 					tcid: string,
-					params: { e: [["ia", string, string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+					params: { e: [["rb", string, string, string]] },
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
 			};
 			const result = await tool.execute("1", {
-				e: [["ia", "app.ts", "function", "add", "\nexport function sub(a: number, b: number) {\n  return a - b;\n}\n"]],
+				e: [["rb", "medium.ts", before, after]],
 			});
 
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(readFileSync(file, "utf8")).toBe(
-				"export function add(a: number, b: number) {\n  return a + b;\n}\nexport function sub(a: number, b: number) {\n  return a - b;\n}\n\n\nconst done = true;\n",
-			);
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=rb");
+			expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
+			expect(result.details?.noWrite).toBe(true);
+			expect(readFileSync(file, "utf8")).toBe(before);
 		} finally {
 			process.chdir(previousCwd);
 			rmSync(tmp, { recursive: true, force: true });
 		}
 	});
 
-	test("minimal blitz_edit applies JS insert-after function declaration", async () => {
+	test("minimal blitz_edit declines ia structural tuple without mutation", async () => {
 		delete process.env.PI_BLITZ_TOOL_PROFILE;
-		useLocalBlitzBinaryIfAvailable();
-		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-ia-js-"));
+		const tmp = mkdtempSync(join(tmpdir(), "pi-blitz-ia-minimal-decline-"));
 		const previousCwd = process.cwd();
 		try {
 			process.chdir(tmp);
-			const file = join(tmp, "app.js");
-			writeFileSync(file, "function add(a, b) {\n  return a + b;\n}\n\nconst done = true;\n");
+			const file = join(tmp, "app.ts");
+			const before = "export function add(a: number, b: number) {\n  return a + b;\n}\n";
+			writeFileSync(file, before);
 			const { pi, registeredTools } = createFakePi();
 
 			await piBlitz(pi);
@@ -786,17 +563,17 @@ describe("pi-blitz tool profiles", () => {
 				execute: (
 					tcid: string,
 					params: { e: [["ia", string, string, string, string]] },
-				) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+				) => Promise<{ isError?: boolean; content: Array<{ text?: string }>; details?: Record<string, unknown> }>;
 			};
 			const result = await tool.execute("1", {
-				e: [["ia", "app.js", "function", "add", "\nfunction sub(a, b) {\n  return a - b;\n}\n"]],
+				e: [["ia", "app.ts", "function", "add", "\nexport function sub() {}\n"]],
 			});
 
-			expect(result.isError).not.toBe(true);
-			expect(result.content[0]?.text).toContain("ok c=1");
-			expect(readFileSync(file, "utf8")).toBe(
-				"function add(a, b) {\n  return a + b;\n}\nfunction sub(a, b) {\n  return a - b;\n}\n\n\nconst done = true;\n",
-			);
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("decline op=ia");
+			expect(result.content[0]?.text).toContain(minimalBlitzEditStructuralDeclineReason);
+			expect(result.details?.noWrite).toBe(true);
+			expect(readFileSync(file, "utf8")).toBe(before);
 		} finally {
 			process.chdir(previousCwd);
 			rmSync(tmp, { recursive: true, force: true });

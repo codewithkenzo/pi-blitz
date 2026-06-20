@@ -187,7 +187,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 		Type.Array(opTupleValueSchema, {
 			minItems: 3,
 			maxItems: 5,
-			description: "['x',file,old,new] or ['x',old,new]+f; TS/JS ['rb'|'ia',file,'function',name,text].",
+			description: "['x',file,old,new] or ['x',old,new]+f; rb declines in minimal.",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -2617,7 +2617,7 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz {f?,e}. x exact; prefer [x,file,old,new], [x,old,new] needs f. TS/JS rb body, ia after fn. Fail closed; no fallback. Stop on ok/noop.",
+			"Blitz {f?,e}. x exact. Prefer [x,file,old,new]; [x,old,new] needs f. rb declines in minimal. Fail closed; no fallback.",
 		parameters: blitzEditToolParamsSchema,
 			execute: async (
 			_tcid: string,
@@ -2635,17 +2635,9 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 				});
 			}
 
-			const structuralTuple = params.e.find((tuple) => {
-				if (!isMinimalBlitzEditStructuralAlias(tuple[0])) return false;
-				const supportedClassC =
-					isMinimalClassCStructuralTuple(tuple) &&
-					isMinimalClassCLanguage(tuple[1]);
-				const supportedBracedBody =
-					isMinimalRbBracedBodyTuple(tuple) && isMinimalClassCLanguage(tuple[1]);
-				const oldNewExact =
-					isMinimalRbOldNewTuple(tuple) && !isMinimalRbBracedBodyTuple(tuple);
-				return !supportedClassC && !supportedBracedBody && !oldNewExact;
-			});
+			const structuralTuple = params.e.find((tuple) =>
+				isMinimalBlitzEditStructuralAlias(tuple[0]),
+			);
 			if (structuralTuple) {
 				const op = structuralTuple[0];
 				return {
