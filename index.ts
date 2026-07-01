@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./src/config.js";
 import {
 	getProfiledToolDefs,
-	profileLabel,
 	resolvePiBlitzToolProfile,
 } from "./src/tool-profiles.js";
 
@@ -44,7 +43,6 @@ export default async function piBlitz(pi: ExtensionAPI): Promise<void> {
 	for (const tool of getProfiledToolDefs(binary, cwd, profile)) {
 		pi.registerTool(tool);
 	}
-	console.warn(`[pi-blitz] tool profile ${profileLabel(profile)} registered`);
 
 	if (!state.skillsAnnounced) {
 		const sourceSkillDir = join(baseDir, "skills", "pi-blitz");
