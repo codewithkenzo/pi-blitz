@@ -2,8 +2,12 @@ import { Type } from "@sinclair/typebox";
 import { Effect } from "effect";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
-import { spawnCollectNode } from "./spawn.js";
+import { extname, isAbsolute, resolve } from "node:path";
+import {
+	spawnCollectNode,
+	type SpawnOptions,
+	type SpawnResult,
+} from "./spawn.js";
 import { canonicalize } from "./paths.js";
 import { runTool, type BlitzToolResult } from "./tool-runtime.js";
 import { makePathLocks } from "./mutex.js";
@@ -13,6 +17,10 @@ import {
 	BlitzTimeoutError,
 	InvalidParamsError,
 } from "./errors.js";
+import {
+	isMinimalBlitzEditStructuralAlias,
+	minimalBlitzEditStructuralDeclineReason,
+} from "./language-capabilities.js";
 
 // Module-level locks shared across all tool definitions so concurrent tool calls
 // targeting the same canonical path serialize.
@@ -167,12 +175,11 @@ export const patchToolParamsSchema = Type.Object({
 	),
 });
 
-export const opTupleValueSchema = Type.Union(
-	[Type.String({ maxLength: SNIPPET_MAX }), Type.Number(), Type.Boolean()],
-	{
-		description: "Compact op tuple item.",
-	},
-);
+export const opTupleValueSchema = Type.Union([
+	Type.String({ maxLength: SNIPPET_MAX }),
+	Type.Number(),
+	Type.Boolean(),
+]);
 
 export const blitzEditToolParamsSchema = Type.Object({
 	f: Type.Optional(Type.String({ minLength: 1, maxLength: PATH_MAX })),
@@ -180,8 +187,7 @@ export const blitzEditToolParamsSchema = Type.Object({
 		Type.Array(opTupleValueSchema, {
 			minItems: 3,
 			maxItems: 5,
-			description:
-				"OpenAI-compatible edit tuple. Prefer ['x',file,old,new] for exact replacements. ['x',old,new] is allowed only when top-level f is present. Structural: ['rb'|'ia',file,kind,name,text]. Runtime validates op and tuple length.",
+			description: "['x',file,old,new] or ['x',old,new]+f; rb declines in minimal.",
 		}),
 		{ minItems: 1, maxItems: BATCH_MAX_ITEMS },
 	),
@@ -529,6 +535,112 @@ const assertByteCap = (payload: string, maxBytes: number, label: string) => {
 
 const isNonEmptyString = (value: unknown): value is string => {
 	return typeof value === "string" && value.trim().length > 0;
+};
+
+const isMinimalClassCStructuralTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb" | "ia", string, "function", string, string] =>
+	(tuple[0] === "rb" || tuple[0] === "ia") &&
+	tuple.length === 5 &&
+	typeof tuple[1] === "string" &&
+	tuple[2] === "function" &&
+	isNonEmptyString(tuple[3]) &&
+	typeof tuple[4] === "string";
+
+const isMinimalRbOldNewTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb", string, string, string] =>
+	tuple[0] === "rb" &&
+	tuple.length === 4 &&
+	typeof tuple[1] === "string" &&
+	isNonEmptyString(tuple[2]) &&
+	typeof tuple[3] === "string";
+
+const isMinimalRbBracedBodyTuple = (
+	tuple: readonly unknown[],
+): tuple is readonly ["rb", string, string, string] =>
+	isMinimalRbOldNewTuple(tuple) &&
+	/^[A-Za-z_$][\w$]*$/.test(tuple[2]) &&
+	stripMinimalOuterBodyBraces(tuple[3]) !== null;
+
+export const minimalBlitzEditSuccessText = (
+	count: number,
+	files: number,
+	sequential: boolean,
+) => `ok c=${count} f=${files} seq=${sequential} rb=${sequential}`;
+
+export const minimalBlitzEditDeclineText = (op: string) =>
+	`decline op=${op} reason=${minimalBlitzEditStructuralDeclineReason} no_mutation=true`;
+
+const normalizeMinimalFunctionBody = (body: string): string => {
+	const withLeadingNewline = body.startsWith("\n") ? body : `\n${body}`;
+	return withLeadingNewline.endsWith("\n")
+		? withLeadingNewline
+		: `${withLeadingNewline}\n`;
+};
+
+const stripMinimalOuterBodyBraces = (body: string): string | null => {
+	const trimmed = body.trim();
+	if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+
+	let depth = 0;
+	let quote: '"' | "'" | "`" | null = null;
+	let escaped = false;
+	let lineComment = false;
+	let blockComment = false;
+	for (let idx = 0; idx < trimmed.length; idx++) {
+		const char = trimmed[idx]!;
+		const next = trimmed[idx + 1];
+
+		if (lineComment) {
+			if (char === "\n" || char === "\r") lineComment = false;
+			continue;
+		}
+		if (blockComment) {
+			if (char === "*" && next === "/") {
+				blockComment = false;
+				idx++;
+			}
+			continue;
+		}
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (char === quote) quote = null;
+			continue;
+		}
+		if (char === "/" && next === "/") {
+			lineComment = true;
+			idx++;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			blockComment = true;
+			idx++;
+			continue;
+		}
+		if (char === '"' || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
+		if (char === "{") depth++;
+		if (char === "}") depth--;
+		if (depth === 0 && idx !== trimmed.length - 1) return null;
+		if (depth < 0) return null;
+	}
+	if (depth !== 0 || quote || lineComment || blockComment) return null;
+	return trimmed.slice(1, -1);
+};
+
+const isMinimalClassCLanguage = (file: string): boolean => {
+	const ext = extname(file).toLowerCase();
+	return ext === ".ts" || ext === ".js";
 };
 
 const isOccurrence = (
@@ -1052,6 +1164,21 @@ class SpawnException {
 	constructor(public readonly cause: unknown) {}
 }
 
+export type BlitzRunner = (
+	argv: string[],
+	opts: SpawnOptions,
+) => Promise<SpawnResult>;
+
+let blitzRunnerOverride: BlitzRunner | undefined;
+
+export const setBlitzRunnerForTests = (runner: BlitzRunner): (() => void) => {
+	const previous = blitzRunnerOverride;
+	blitzRunnerOverride = runner;
+	return () => {
+		blitzRunnerOverride = previous;
+	};
+};
+
 const runBlitz = (
 	binary: string,
 	argv: string[],
@@ -1061,15 +1188,12 @@ const runBlitz = (
 		timeoutMs: number;
 		signal?: AbortSignal;
 	},
-): Effect.Effect<
-	{ stdout: string; stderr: string; exitCode: number },
-	BlitzTimeoutError | BlitzMissingError
-> =>
+): Effect.Effect<SpawnResult, BlitzTimeoutError | BlitzMissingError> =>
 	Effect.gen(function* () {
 		const cmd = [binary, "--workspace-root", opts.cwd, ...argv];
 		const result = yield* Effect.tryPromise({
 			try: () => {
-				const spawnOpts: Parameters<typeof spawnCollectNode>[1] = {
+				const spawnOpts: SpawnOptions = {
 					cwd: opts.cwd,
 					timeoutMs: opts.timeoutMs,
 					env: {
@@ -1083,7 +1207,7 @@ const runBlitz = (
 				};
 				if (opts.stdin !== undefined) spawnOpts.stdin = opts.stdin;
 				if (opts.signal !== undefined) spawnOpts.signal = opts.signal;
-				return spawnCollectNode(cmd, spawnOpts);
+				return (blitzRunnerOverride ?? spawnCollectNode)(cmd, spawnOpts);
 			},
 			catch: (cause) => new SpawnException(cause),
 		}).pipe(
@@ -1282,7 +1406,9 @@ type BlitzEditParams = {
 	e: Array<
 		| ["x", string, string]
 		| ["x", string, string, string]
-		| ["rb" | "ia", string, string, string, string]
+		| [string, string, string]
+		| [string, string, string, string]
+		| [string, string, string, string, string]
 	>;
 };
 
@@ -1736,6 +1862,14 @@ const normalizeCompactTupleForBlitz = (
 			return ["x", normalizedExact.find, normalizedExact.replace];
 		}
 		return ["x", ...tuple.slice(1)];
+	}
+	if (
+		normalized === "ia" &&
+		tuple[1] === "function" &&
+		typeof tuple[2] === "string" &&
+		typeof tuple[3] === "string"
+	) {
+		return [normalized, tuple[1], tuple[2], tuple[3]];
 	}
 	if (normalized === "ia" && typeof tuple[1] === "string" && typeof tuple[2] === "string") {
 		const exactFile = cwd && file && !isAbsolute(file) ? resolve(cwd, file) : file;
@@ -2483,12 +2617,47 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 		name: "blitz_edit",
 		label: "blitz edit",
 		description:
-			"Blitz edit. Args {f?,e}; e must be an array of tuples. Use x exact replacement for imports/local lines/formatting/batches by replacing smallest unique surrounding block; prefer [x,file,old,new]. 3-item [x,old,new] requires top-level f. rb replaces symbol body only. ia inserts after symbol declaration only, not text anchors. No-op/already-present: do not call tool. If result starts ok, stop and answer done; never retry same edit.",
+			"Blitz {f?,e}. x exact. Prefer [x,file,old,new]; [x,old,new] needs f. rb declines in minimal. Fail closed; no fallback.",
 		parameters: blitzEditToolParamsSchema,
-		execute: async (
+			execute: async (
 			_tcid: string,
 			params: BlitzEditParams,
 		): Promise<BlitzToolResult> => {
+			const allExactNoops = params.e.every((tuple) => {
+				if (tuple[0] !== "x") return false;
+				return tuple.length === 3 ? tuple[1] === tuple[2] : tuple[2] === tuple[3];
+			});
+			if (allExactNoops) {
+				return okResult("noop reason=already_present no_mutation=true", {
+					status: "noop",
+					reason: "already_present",
+					noWrite: true,
+				});
+			}
+
+			const structuralTuple = params.e.find((tuple) =>
+				isMinimalBlitzEditStructuralAlias(tuple[0]),
+			);
+			if (structuralTuple) {
+				const op = structuralTuple[0];
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text:
+								minimalBlitzEditDeclineText(op),
+						},
+					],
+					isError: true,
+					details: {
+						status: "declined",
+						reason: minimalBlitzEditStructuralDeclineReason,
+						operation: op,
+						noWrite: true,
+					},
+				};
+			}
+
 			const jobs = params.e.map((tuple) => {
 				if (tuple[0] === "x") {
 					if (tuple.length === 3) {
@@ -2507,16 +2676,65 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
 					};
 				}
-				if (tuple[0] === "rb" || tuple[0] === "ia") {
+				if (isMinimalClassCStructuralTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
 					return {
 						f: tuple[1],
-						op: [tuple[0], tuple[2], tuple[3], tuple[4]] as Array<
-							string | number | boolean
-						>,
+						op: [
+							tuple[0],
+							tuple[2],
+							tuple[3],
+							tuple[0] === "rb"
+								? normalizeMinimalFunctionBody(tuple[4])
+								: tuple[4],
+						] as Array<string | number | boolean>,
 					};
 				}
+				if (isMinimalRbBracedBodyTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
+					const body = stripMinimalOuterBodyBraces(tuple[3]);
+					if (body === null) {
+						throw new InvalidParamsError({
+							reason: minimalBlitzEditStructuralDeclineReason,
+						});
+					}
+					return {
+						f: tuple[1],
+						op: [
+							"rb",
+							"function",
+							tuple[2],
+							normalizeMinimalFunctionBody(body),
+						] as Array<string | number | boolean>,
+					};
+				}
+				if (isMinimalRbOldNewTuple(tuple)) {
+					if (!isMinimalClassCLanguage(tuple[1])) {
+						throw new InvalidParamsError({
+							reason:
+								"unsupported rb old/new tuple for non-TS/JS file; provider emitted structural-old-new shape and pi-blitz declined without writes",
+						});
+					}
+					return {
+						f: tuple[1],
+						op: ["x", tuple[2], tuple[3]] as Array<string | number | boolean>,
+					};
+				}
+				if (isMinimalBlitzEditStructuralAlias(tuple[0])) {
+					throw new InvalidParamsError({
+						reason: minimalBlitzEditStructuralDeclineReason,
+					});
+				}
 				throw new InvalidParamsError({
-					reason: "e only supports x/rb/ia tuples",
+					reason: "e only supports x plus TS/JS rb/ia function tuples in minimal profile",
 				});
 			});
 
@@ -2575,10 +2793,14 @@ export const blitzEditToolDef = (binary: string, cwd: string) =>
 							}
 
 							const atomicityNote = sequentialApply
-								? "rollback-backed atomic batch: pi-blitz snapshots touched files after previews and restores them if any later apply fails; no core/apply_patch fallback used."
-								: "single Blitz apply is atomic for this file at tool-call level; no core/apply_patch fallback used.";
+								? "snapshot rollback on later apply failure; no fallback"
+								: "single Blitz apply; no fallback";
 							return okResult(
-								`ok c=${jobs.length} files=${uniqueFiles.length} groupedApply=${!sequentialApply} sequentialApply=${sequentialApply} sameFileAtomic=true crossFileAtomic=true rollbackBacked=${sequentialApply}`,
+								minimalBlitzEditSuccessText(
+									jobs.length,
+									uniqueFiles.length,
+									sequentialApply,
+								),
 								{
 									status: "applied",
 									count: jobs.length,

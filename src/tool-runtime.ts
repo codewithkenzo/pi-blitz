@@ -80,11 +80,10 @@ export interface BlitzToolResult {
  * `Cause.findErrorOption` is the correct extractor in effect@4.0.0-beta.48;
  * `Cause.failureOption` does not exist in v4.
  */
-export const runTool = async <A>(
-	effect: Effect.Effect<A, PiBlitzError>,
+export const classifyToolExit = <A>(
+	exit: Exit.Exit<A, PiBlitzError>,
 	serialize: (value: A) => BlitzToolResult,
-): Promise<BlitzToolResult> => {
-	const exit = await Effect.runPromiseExit(effect);
+): BlitzToolResult => {
 	if (Exit.isSuccess(exit)) return serialize(exit.value);
 
 	const errOpt = Cause.findErrorOption(exit.cause);
@@ -104,6 +103,11 @@ export const runTool = async <A>(
 
 	throw new Error(`pi-blitz failed: ${Cause.pretty(exit.cause)}`);
 };
+
+export const runTool = async <A>(
+	effect: Effect.Effect<A, PiBlitzError>,
+	serialize: (value: A) => BlitzToolResult,
+): Promise<BlitzToolResult> => classifyToolExit(await Effect.runPromiseExit(effect), serialize);
 
 const renderSoftText = (
 	err: Extract<PiBlitzError, { _tag: "BlitzSoftError" }>,

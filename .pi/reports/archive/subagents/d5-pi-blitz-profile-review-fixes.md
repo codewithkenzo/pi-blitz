@@ -15,7 +15,7 @@ Implemented reviewer-required profile fixes on `feat/blitz-0.4-token-core-profil
 - `src/tool-profiles.ts`
 - `scripts/dump-tool-specs.ts`
 - `test/tool-profiles.test.ts`
-- `reports/subagents/d5-pi-blitz-profile-review-fixes.md`
+- `.pi/reports/subagents/d5-pi-blitz-profile-review-fixes.md`
 
 ## Tests added/updated
 

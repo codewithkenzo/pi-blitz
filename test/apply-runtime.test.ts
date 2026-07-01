@@ -99,6 +99,43 @@ describe("pi_blitz_apply runtime path", () => {
 		}
 	});
 
+	test("can inject a fake Blitz runner without changing public output", async () => {
+		const calls: Array<{ argv: string[]; stdin?: string | Uint8Array }> = [];
+		const restore = tools.setBlitzRunnerForTests(async (argv, opts) => {
+			const call: { argv: string[]; stdin?: string | Uint8Array } = { argv };
+			if (opts.stdin !== undefined) call.stdin = opts.stdin;
+			calls.push(call);
+			return successResult();
+		});
+		try {
+			const tool = tools.replaceBodySpanToolDef("blitz", tmpDir);
+			const result = await tool.execute("1", {
+				file: "app.ts",
+				symbol: "foo",
+				find: "return 1;",
+				replace: "return 2;",
+				occurrence: "only",
+			});
+
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.argv).toEqual([
+				"blitz",
+				"--workspace-root",
+				tmpDir,
+				"apply",
+				"--edit",
+				"-",
+				"--json",
+			]);
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain(
+				"blitz apply: status=applied operation=replace_body_span",
+			);
+		} finally {
+			restore();
+		}
+	});
+
 	test("narrow replace_body_span invokes blitz apply with compact schema", async () => {
 		const tool = tools.replaceBodySpanToolDef("blitz", tmpDir);
 		await tool.execute("1", {
@@ -287,14 +324,14 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("groupedApply=false");
-		expect(result.content[0]?.text).toContain("sequentialApply=true");
-		expect(result.content[0]?.text).toContain("sameFileAtomic=true");
+		expect(result.content[0]?.text).toContain("ok c=2 f=1");
+		expect(result.content[0]?.text).toContain("seq=true");
+		expect(result.content[0]?.text).toContain("rb=true");
 		expect(result.details?.groupedApply).toBe(false);
 		expect(result.details?.sequentialApply).toBe(true);
 		expect(result.details?.sameFileAtomic).toBe(true);
 		expect(result.details?.crossFileAtomic).toBe(true);
-		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
+		expect(result.details?.atomicityNote).toContain("snapshot rollback");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 
 		const firstPreview = spawnCollectMock.mock.calls[0] as unknown as [
@@ -415,10 +452,11 @@ describe("pi_blitz_apply runtime path", () => {
 		});
 
 		expect(result.isError).toBeUndefined();
-		expect(result.content[0]?.text).toContain("crossFileAtomic=true");
+		expect(result.content[0]?.text).toContain("ok c=2 f=2");
+		expect(result.content[0]?.text).toContain("seq=true");
 		expect(result.details?.sameFileAtomic).toBe(true);
 		expect(result.details?.crossFileAtomic).toBe(true);
-		expect(result.details?.atomicityNote).toContain("rollback-backed atomic");
+		expect(result.details?.atomicityNote).toContain("snapshot rollback");
 		expect(spawnCollectMock).toHaveBeenCalledTimes(4);
 		const first = spawnCollectMock.mock.calls[0] as unknown as [
 			string[],
