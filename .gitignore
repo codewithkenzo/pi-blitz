@@ -1,6 +1,10 @@
 node_modules/
 dist/
-.pi/
+.pi/*
+!.pi/research/
+!.pi/research/**
+!.pi/reports/
+!.pi/reports/**
 .tokensave/
 *.tgz
 .DS_Store
