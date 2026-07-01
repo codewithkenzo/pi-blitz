@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { PiToolDef } from "./pi-api.js";
 import {
 	batchToolDef,
 	blitzEditToolDef,
@@ -23,8 +23,7 @@ import {
 export type PiBlitzToolProfile = "minimal" | "router" | "semantic" | "structural" | "admin" | "full";
 export type PiBlitzProfileLabel = PiBlitzToolProfile | "minimal-v0";
 
-type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
-type ToolFactory = (binary: string, cwd: string) => ToolDef;
+type ToolFactory = (binary: string, cwd: string) => PiToolDef;
 
 const PROFILE_TOOLS = {
 	minimal: [blitzEditToolDef],
@@ -64,7 +63,7 @@ export const resolvePiBlitzToolProfile = (value: string | undefined): PiBlitzToo
 export const profileLabel = (profile: PiBlitzToolProfile): PiBlitzProfileLabel =>
 	profile === "minimal" ? "minimal-v0" : profile;
 
-export const getProfiledToolDefs = (binary: string, cwd: string, profile: PiBlitzToolProfile): ToolDef[] =>
+export const getProfiledToolDefs = (binary: string, cwd: string, profile: PiBlitzToolProfile): PiToolDef[] =>
 	PROFILE_TOOLS[profile].map((factory) => factory(binary, cwd));
 
 export const getProfiledToolNames = (profile: PiBlitzToolProfile): string[] =>

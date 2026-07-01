@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "./src/pi-api.js";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
