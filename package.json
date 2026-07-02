@@ -1,6 +1,6 @@
 {
   "name": "@codewithkenzo/pi-blitz",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Pi extension for Blitz: fast, token-efficient code edits using the Zig Blitz CLI.",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,6 +27,7 @@
     "check:tax": "bun scripts/check-tax-guards.ts"
   },
   "keywords": [
+    "pi-package",
     "pi",
     "pi-agent",
     "pi-coding-agent",
